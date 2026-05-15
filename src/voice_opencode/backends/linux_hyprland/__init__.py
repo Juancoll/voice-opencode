@@ -1,0 +1,1 @@
+"""Hyprland window manager backend."""

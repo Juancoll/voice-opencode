@@ -5,6 +5,46 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-15 — Phase 0: platform abstraction (``platform/`` + ``backends/``)
+
+- Inserted a platform layer between consumers and the OS so the
+  codebase is OS- and DE-agnostic. Consumers (mcp_server, cli, tray,
+  pipeline) import from ``voice_opencode.platform`` only.
+- New ``platform/`` package: ``base.py`` (Protocols), ``types.py``
+  (Window/Workspace/Monitor/Rect dataclasses), ``capabilities.py``
+  (stable cap-string constants), ``null.py`` (NotSupportedError
+  fallbacks), ``__init__.py`` (detection + lazy singletons).
+- New ``backends/`` package with sub-packages per (OS, subsystem):
+  ``linux_hyprland`` (WM via hyprctl), ``linux_wlroots`` (grim screen
+  capture, wlr-randr fallback), ``linux_input`` (ydotool + wtype),
+  ``linux_clipboard_wayland`` (wl-clipboard), ``linux_dialog_kde``
+  (libnotify real, kdialog stub), and stubs for ``linux_kde_wayland``,
+  ``linux_x11``, ``linux_clipboard_x11``, ``linux_audio_pipewire``,
+  ``linux_dialog_gtk``, ``macos_stub``, ``windows_stub``.
+- ``desktop.py`` and ``screenshot.py`` rewritten as thin shims over
+  ``platform.input/wm`` and ``platform.screen`` so external imports
+  keep working.
+- ``mcp_server.py`` rewritten capability-driven: each tool only
+  registers if ``plat.supported(cap)`` is True. Tool surface now
+  expands to include ``list_windows``, ``find_windows``, ``focus_window``,
+  ``close_window``, ``move_window``, ``resize_window``, ``toggle_floating``,
+  ``toggle_fullscreen``, ``switch_workspace``, ``move_window_to_workspace``,
+  ``send_workspace_to_monitor``, ``list_workspaces``, ``active_workspace``,
+  ``clipboard_read``, ``clipboard_write``, ``scroll_mouse``,
+  ``platform_info`` (always-on diagnostic).
+- ``Settings`` gained ``platform_override`` and ``capacity_mode``
+  (``capacity_mode`` is a placeholder for Phase D).
+- New tests: ``test_platform.py`` (10 detection + wiring cases),
+  ``test_backend_hyprland.py`` (6 cases with mocked hyprctl).
+  ``test_desktop_keys.py`` migrated to target the new backend.
+  ``test_mcp_server.py`` rewritten to verify capability-driven
+  registration (no caps → no tools, full caps → all tools).
+- Smoke-tested live on this host: detected ``linux-hyprland``, 30
+  capabilities active, real WM/screen/clipboard/notify backends, the
+  rest fall through to ``Null*``.
+- 57 tests verde, ruff verde, mypy verde (51 source files).
+- ADR-0012 added; ARCHITECTURE rewritten.
+
 ## 2026-05-15 — Audit fixes, robust subprocess handling, icons for dark/light
 
 - Auditoría aplicada (CRITICAL + HIGH):

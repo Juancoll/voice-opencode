@@ -5,6 +5,69 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0012 — Platform abstraction layer (``platform/`` + ``backends/``)
+**Date:** 2026-05-15
+
+**Context.** Phase A (Hyprland window control) was about to land as a
+top-level ``windows.py`` module that called ``hyprctl`` directly, with
+``mcp_server.py`` importing it by name. The same was already true of
+``desktop.py`` (wtype + ydotool + hyprctl) and ``screenshot.py`` (grim
++ hyprctl). Result: every consumer module had Hyprland and wlroots
+baked into its imports. Porting to KDE/X11/Windows would mean
+rewriting consumers, not adding adapters.
+
+**Decision.** Insert a platform abstraction layer between consumers
+and the OS:
+
+* ``platform/base.py`` — Protocols (PEP 544) for ``WindowManager``,
+  ``InputBackend``, ``ScreenBackend``, ``ClipboardBackend``,
+  ``NotifyBackend``, ``DialogBackend``, ``AudioBackend``,
+  ``MediaBackend``, ``AppLauncher``, ``ShellBackend``.
+* ``platform/types.py`` — frozen dataclasses (``Window``, ``Workspace``,
+  ``Monitor``, ``Rect``) shared by every backend.
+* ``platform/capabilities.py`` — stable string constants for every
+  abstract operation. Each backend declares which it supports via
+  ``capabilities() -> frozenset[str]``.
+* ``platform/__init__.py`` — auto-detect (env vars + ``sys.platform``),
+  honour ``settings.platform_override``, expose lazy module-level
+  singletons (``wm``, ``input``, ``screen`` …). Always returns a
+  *something* — Null backends raise ``NotSupportedError`` rather than
+  letting consumers crash on ``None``.
+* ``backends/<os>_<system>/`` — concrete implementations
+  (``linux_hyprland``, ``linux_wlroots``, ``linux_input``,
+  ``linux_clipboard_wayland``, ``linux_dialog_kde``…). Stubs for
+  ``macos_stub`` and ``windows_stub`` so the wiring compiles.
+* ``mcp_server.py`` registers a tool **iff** ``platform.supported(cap)``
+  returns True for its capability constant. The model never sees a
+  tool that's guaranteed to fail on this host.
+
+**Alternatives considered.**
+
+* *Keep flat modules and add ``if`` branches.* Initially simpler;
+  becomes a nightmare at four backends.
+* *Subclass-based base classes (ABC).* More ceremony, no benefit over
+  Protocols, harder for tests to inject fakes.
+* *PyAutoGUI-style monolith.* Loses fidelity (no workspaces, no MPRIS,
+  no per-tool capability filtering).
+
+**Consequences.**
+
+* Consumers (CLI, MCP server, tray, pipeline) import from
+  ``voice_opencode.platform`` only — never from a backend directly.
+  ``desktop.py`` and ``screenshot.py`` are now thin shims that delegate
+  to the platform layer (kept to preserve external import paths).
+* Adding a new platform = writing one or more backend classes that
+  satisfy the Protocols + wiring them in ``_build()``. No consumer
+  edits required.
+* Capability strings are part of the public contract: renaming one is
+  a breaking change for every backend.
+* Tests now cover (a) detection logic, (b) each backend with mocked
+  subprocess, (c) the MCP registration is capability-driven.
+* Mypy file count went from 18 to 51; the ``Null*`` family adds noise
+  but each is one-line per method.
+
+---
+
 ## ADR-0011 — MCP server with per-call agent lock
 **Date:** 2026-05-15
 

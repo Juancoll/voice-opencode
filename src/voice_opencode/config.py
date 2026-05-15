@@ -42,6 +42,13 @@ class Settings:
     notify: bool = True
     opencode_host: str = "127.0.0.1"
     opencode_port: int = 4096
+    # Force a specific platform/backend wiring. Empty = auto-detect.
+    # See voice_opencode.platform for accepted values
+    # (e.g. "linux-hyprland", "linux-x11", "linux-kde-wayland").
+    platform_override: str = ""
+    # Capacity mode for the MCP agent: "read-only" | "assist" | "full".
+    # Used by Phase D (capacity_modes) to filter exposed tools.
+    capacity_mode: str = "assist"
 
     @property
     def opencode_url(self) -> str:
@@ -62,6 +69,8 @@ ENV_MAP: Final[dict[str, str]] = {
     "notify": "VOICE_NOTIFY",
     "opencode_host": "OPENCODE_HOST",
     "opencode_port": "OPENCODE_PORT",
+    "platform_override": "VOICE_PLATFORM",
+    "capacity_mode": "VOICE_CAPACITY_MODE",
 }
 
 
