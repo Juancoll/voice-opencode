@@ -106,12 +106,17 @@ def detect_platform(env: dict[str, str] | None = None) -> str:
 # Backend factories — lazy imports so missing optional deps don't crash
 # ---------------------------------------------------------------------------
 def _try(factory: Any, name: str) -> Any | None:
-    """Run ``factory()``; on any exception, log and return None."""
+    """Run ``factory()``; on any exception, log once at debug volume.
+
+    A backend being absent is normal (e.g. kdialog on a GTK box). We
+    only log when ``VOICE_DEBUG_BACKENDS=1`` so CLI output stays clean.
+    """
     try:
         return factory()
     except Exception as exc:  # pragma: no cover — defensive
-        from ..logging import log
-        log(f"backend {name} unavailable: {exc}")
+        if os.environ.get("VOICE_DEBUG_BACKENDS") == "1":
+            from ..logging import log
+            log(f"backend {name} unavailable: {exc}")
         return None
 
 
@@ -273,4 +278,4 @@ __all__ = [
     "PLATFORM_LINUX_WLROOTS", "PLATFORM_LINUX_X11",
     "PLATFORM_LINUX_GENERIC", "PLATFORM_MACOS", "PLATFORM_WINDOWS",
     "PLATFORM_UNKNOWN",
-] + [n for n in dir(_cap_module) if n.isupper()] + [n for n in dir(_cap_module) if n.isupper()]
+] + [n for n in dir(_cap_module) if n.isupper()]

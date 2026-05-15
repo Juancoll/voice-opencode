@@ -37,9 +37,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import agent, audio, config, desktop, paths, pipeline, screenshot, state, tts
+from . import platform as plat
 from .logging import log
 from .notify import notify
 from .opencode_client import Session, health
+from .platform.base import BackendError, NotSupportedError
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +343,135 @@ def cmd_desktop(args: list[str]) -> int:
     return 0
 
 
+# ---- windows subgroup -------------------------------------------------------
+def cmd_windows(args: list[str]) -> int:
+    """
+    voice windows list                              — JSON list of all windows
+    voice windows find <needle> [limit]             — substring search
+    voice windows active                            — focused window as JSON
+    voice windows focus <id|substring>              — focus a window
+    voice windows close <id|substring>              — politely close
+    voice windows move <id> <x> <y>                 — move floating window
+    voice windows resize <id> <w> <h>               — resize floating window
+    voice windows float <id>                        — toggle floating
+    voice windows fullscreen [id]                   — toggle fullscreen
+    voice windows send-to-workspace <id> <ws>       — silent move to workspace
+    """
+    if not args:
+        _eprint(cmd_windows.__doc__)
+        return 1
+    sub, rest = args[0], args[1:]
+    try:
+        if sub == "list":
+            print(json.dumps(
+                [w.to_dict() for w in plat.wm.list_windows()],
+                ensure_ascii=False, indent=2,
+            ))
+        elif sub == "find":
+            if not rest:
+                _eprint("Usage: voice windows find <needle> [limit]")
+                return 1
+            needle = rest[0]
+            limit = int(rest[1]) if len(rest) >= 2 else 10
+            print(json.dumps(
+                [w.to_dict() for w in plat.wm.find_windows(needle, limit=limit)],
+                ensure_ascii=False, indent=2,
+            ))
+        elif sub == "active":
+            w = plat.wm.active_window()
+            print(json.dumps(w.to_dict() if w else {}, ensure_ascii=False, indent=2))
+        elif sub == "focus" and rest:
+            plat.wm.focus_window(rest[0])
+            print(f"focused {rest[0]}")
+        elif sub == "close" and rest:
+            plat.wm.close_window(rest[0])
+            print(f"closed {rest[0]}")
+        elif sub == "move" and len(rest) == 3:
+            plat.wm.move_window(rest[0], int(rest[1]), int(rest[2]))
+            print(f"moved {rest[0]} to ({rest[1]},{rest[2]})")
+        elif sub == "resize" and len(rest) == 3:
+            plat.wm.resize_window(rest[0], int(rest[1]), int(rest[2]))
+            print(f"resized {rest[0]} to {rest[1]}x{rest[2]}")
+        elif sub == "float" and rest:
+            plat.wm.toggle_floating(rest[0])
+            print(f"toggled floating {rest[0]}")
+        elif sub == "fullscreen":
+            plat.wm.toggle_fullscreen(rest[0] if rest else None)
+            print(f"toggled fullscreen {rest[0] if rest else '<active>'}")
+        elif sub == "send-to-workspace" and len(rest) == 2:
+            plat.wm.move_window_to_workspace(rest[0], rest[1])
+            print(f"moved {rest[0]} → workspace {rest[1]}")
+        else:
+            _eprint(cmd_windows.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
+# ---- workspaces subgroup ----------------------------------------------------
+def cmd_workspaces(args: list[str]) -> int:
+    """
+    voice workspaces list                  — all workspaces as JSON
+    voice workspaces active                — currently active workspace
+    voice workspaces switch <id|name>      — switch to workspace
+    voice workspaces send-to-monitor <t>   — send active ws to another monitor
+                                             (l|r|u|d or numeric id)
+    """
+    if not args:
+        _eprint(cmd_workspaces.__doc__)
+        return 1
+    sub, rest = args[0], args[1:]
+    try:
+        if sub == "list":
+            print(json.dumps(
+                [w.to_dict() for w in plat.wm.list_workspaces()],
+                ensure_ascii=False, indent=2,
+            ))
+        elif sub == "active":
+            w = plat.wm.active_workspace()
+            print(json.dumps(w.to_dict() if w else {}, ensure_ascii=False, indent=2))
+        elif sub == "switch" and rest:
+            plat.wm.switch_workspace(rest[0])
+            print(f"switched to workspace {rest[0]}")
+        elif sub == "send-to-monitor" and rest:
+            plat.wm.send_workspace_to_monitor(rest[0])
+            print(f"sent active workspace to monitor {rest[0]}")
+        else:
+            _eprint(cmd_workspaces.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
+# ---- platform subgroup (diagnostics) ----------------------------------------
+def cmd_platform(args: list[str]) -> int:
+    """
+    voice platform info        — active platform and full capability set
+    voice platform caps        — just the capability set, one per line
+    """
+    sub = args[0] if args else "info"
+    if sub == "info":
+        print(json.dumps(
+            {
+                "platform":     plat.active_platform,
+                "override":     config.settings.platform_override,
+                "capabilities": sorted(plat.all_capabilities()),
+            },
+            indent=2, ensure_ascii=False,
+        ))
+    elif sub == "caps":
+        for c in sorted(plat.all_capabilities()):
+            print(c)
+    else:
+        _eprint("Usage: voice platform [info|caps]")
+        return 1
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
@@ -356,8 +487,11 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "resume":   cmd_resume,
     "tray":     cmd_tray,
     "status":   cmd_status,
-    "desktop":  cmd_desktop,
-    "mcp":      cmd_mcp,
+    "desktop":    cmd_desktop,
+    "windows":    cmd_windows,
+    "workspaces": cmd_workspaces,
+    "platform":   cmd_platform,
+    "mcp":        cmd_mcp,
 }
 
 # Legacy flat aliases — preserved for Hyprland binds and muscle memory.

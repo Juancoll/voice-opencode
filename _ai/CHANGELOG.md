@@ -5,6 +5,41 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-15 — Phase A: window & workspace surface (CLI + tray + tests)
+
+- Phase 0 already exposed every Hyprland WM/workspace operation
+  through the MCP layer. Phase A closes the user-facing loop so the
+  human has parity with the agent.
+- ``cli.py``: three new command groups.
+  - ``voice windows {list|find|active|focus|close|move|resize|float|fullscreen|send-to-workspace}``
+  - ``voice workspaces {list|active|switch|send-to-monitor}``
+  - ``voice platform {info|caps}`` — diagnostics: which backend got
+    wired and which capabilities are live.
+  All three delegate to ``platform.wm`` / ``platform.all_capabilities``;
+  ``BackendError``/``NotSupportedError`` are translated into rc=1 with
+  a ``error: …`` line on stderr so shell users get a clean signal.
+- ``tray.py``: two new submenus, ``Ventanas`` and ``Workspaces``.
+  Both use ``QMenu.aboutToShow`` so the listing is always fresh
+  (rebuilt on open, not polled every second). Each window entry has
+  a sub-submenu with Focus / Cerrar / Float / Fullscreen; each
+  workspace entry switches on click. Marker ``●`` on the focused /
+  active item.
+- ``platform/__init__.py``: backend-unavailable warnings now require
+  ``VOICE_DEBUG_BACKENDS=1``. Previously every CLI invocation printed
+  four lines of "kdialog/zenity/wpctl unavailable" noise. Also fixed
+  a duplicated capability re-export in ``__all__``.
+- Tests: 71 passing (was 57). New ``test_backend_hyprland`` cases
+  cover the entire write API by recording the exact ``hyprctl
+  dispatch`` argv (focus/close/move/resize/float/fullscreen/minimize/
+  workspace switch / move-to-workspace / send-to-monitor) plus
+  ``list_workspaces`` active-marking. New ``test_cli`` cases cover
+  ``platform info`` JSON shape, ``windows list`` round-trip,
+  ``windows focus`` invocation, ``workspaces switch`` invocation, and
+  BackendError propagation as rc=1.
+- Smoke live: detected 4 windows across 2 workspaces correctly,
+  active workspace marker correct, ``platform info`` lists 30
+  capabilities. ruff + mypy clean (51 source files).
+
 ## 2026-05-15 — Phase 0: platform abstraction (``platform/`` + ``backends/``)
 
 - Inserted a platform layer between consumers and the OS so the

@@ -119,6 +119,19 @@ class VoiceTray(QSystemTrayIcon):
 
         m.addSeparator()
 
+        # Windows submenu — populated on aboutToShow so it always reflects
+        # the current Hyprland tree without polling every second.
+        self.windows_menu = QMenu("Ventanas", m)
+        self.windows_menu.aboutToShow.connect(self._populate_windows)
+        m.addMenu(self.windows_menu)
+
+        # Workspaces submenu — same lazy strategy.
+        self.workspaces_menu = QMenu("Workspaces", m)
+        self.workspaces_menu.aboutToShow.connect(self._populate_workspaces)
+        m.addMenu(self.workspaces_menu)
+
+        m.addSeparator()
+
         self.voice_menu = QMenu("Cambiar voz", m)
         self.voice_group = QActionGroup(self.voice_menu)
         self.voice_group.setExclusive(True)
@@ -172,6 +185,55 @@ class VoiceTray(QSystemTrayIcon):
             )
             self.voice_group.addAction(act)
             self.voice_menu.addAction(act)
+
+    # -- windows / workspaces submenus (rebuilt every time they open) -------
+    def _populate_windows(self) -> None:
+        self.windows_menu.clear()
+        out = voice_cmd("windows", "list", capture=True) or "[]"
+        try:
+            wins = json.loads(out)
+        except Exception:
+            wins = []
+        if not wins:
+            self._info(self.windows_menu, "(no hay ventanas)")
+            return
+        # Sort by workspace then title for predictability.
+        wins.sort(key=lambda w: (w.get("workspace_id") or 0, (w.get("title") or "").lower()))
+        for w in wins[:30]:
+            wid    = w.get("id") or ""
+            title  = (w.get("title") or w.get("app_id") or "<sin título>")[:60]
+            ws     = w.get("workspace_id")
+            mark   = "● " if w.get("focused") else "  "
+            label  = f"{mark}[ws {ws}] {title}"
+            sub = QMenu(label, self.windows_menu)
+            self._action(sub, "Focus",  lambda _=False, i=wid: voice_cmd("windows", "focus", str(i)))
+            self._action(sub, "Cerrar", lambda _=False, i=wid: voice_cmd("windows", "close", str(i)))
+            self._action(sub, "Float",  lambda _=False, i=wid: voice_cmd("windows", "float", str(i)))
+            self._action(sub, "Fullscreen",
+                         lambda _=False, i=wid: voice_cmd("windows", "fullscreen", str(i)))
+            self.windows_menu.addMenu(sub)
+
+    def _populate_workspaces(self) -> None:
+        self.workspaces_menu.clear()
+        out = voice_cmd("workspaces", "list", capture=True) or "[]"
+        try:
+            wss = json.loads(out)
+        except Exception:
+            wss = []
+        if not wss:
+            self._info(self.workspaces_menu, "(no hay workspaces)")
+            return
+        wss.sort(key=lambda w: w.get("id") or 0)
+        for ws in wss:
+            wid   = ws.get("id")
+            name  = ws.get("name") or str(wid)
+            count = ws.get("window_count", 0)
+            mark  = "● " if ws.get("active") else "  "
+            label = f"{mark}{name}  ({count})"
+            self._action(
+                self.workspaces_menu, label,
+                lambda _=False, i=wid: voice_cmd("workspaces", "switch", str(i)),
+            )
 
     # -- slots --------------------------------------------------------------
     def _on_pause_toggled(self, checked: bool) -> None:

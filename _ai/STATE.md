@@ -115,3 +115,12 @@ messages. Tools surface to the model as `voice_desktop_<name>`
   if STT keeps returning empty strings.
 - DMS uses ayatana-appindicator path under the hood; PyQt6's SNI works,
   Qt5 fallback would not.
+
+## Environment variables (optional)
+
+| Variable                  | Effect                                               |
+|---------------------------|------------------------------------------------------|
+| `VOICE_PLATFORM`          | Force a specific platform (e.g. `linux-x11`).        |
+| `VOICE_CAPACITY_MODE`     | `read-only` / `assist` (default) / `full`.           |
+| `VOICE_DEBUG_BACKENDS=1`  | Log per-backend init failures (else silent).         |
+| `VOICE_DEPRECATION_WARN=1`| Warn when a legacy CLI alias is used.                |

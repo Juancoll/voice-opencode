@@ -30,9 +30,37 @@ The tray menu has a checkbox for the same.
 ```bash
 voice state                   # JSON snapshot (used by the tray)
 voice status                  # human-readable
+voice platform info           # which backend got wired + capability set
+voice platform caps           # capabilities, one per line (handy for grep)
 journalctl --user -u opencode-serve -f
 tail -f logs/voice.log logs/arecord.log logs/piper.log
 ```
+
+## Drive windows / workspaces from the CLI (Phase A)
+
+The same surface the agent sees over MCP is mirrored on the CLI so a
+human can use it from a script or keybinding. Window targets accept
+either an ``address:0x…`` id, a bare ``0x…`` address, or an
+app-id / title substring (resolved via ``find_windows``).
+
+```bash
+voice windows list                          # everything as JSON
+voice windows find chrome                   # substring search
+voice windows active                        # focused window
+voice windows focus chrome                  # focus first match
+voice windows close 0xCAFE                  # polite close
+voice windows float chrome                  # toggle floating
+voice windows fullscreen                    # active window fullscreen
+voice windows send-to-workspace chrome 3    # silent move
+
+voice workspaces list                       # all workspaces
+voice workspaces switch 5                   # go to ws 5
+voice workspaces send-to-monitor l          # current ws → monitor on the left
+```
+
+The tray's ``Ventanas`` and ``Workspaces`` submenus are rebuilt from
+these calls every time they open, so they always show fresh state
+without polling the WM each second.
 
 ## Switch voice
 

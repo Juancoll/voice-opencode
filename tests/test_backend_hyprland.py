@@ -132,3 +132,123 @@ def test_capabilities_excludes_minimize(monkeypatch):
     caps = wm.capabilities()
     assert cap.WM_FOCUS_WINDOW in caps
     assert cap.WM_MINIMIZE_WINDOW not in caps
+
+
+# ---------------------------------------------------------------------------
+# Write API — verify the actual hyprctl dispatch strings (regression guards
+# for the exact CLI args; Hyprland is picky about syntax).
+# ---------------------------------------------------------------------------
+def _hypr_recording(monkeypatch, json_responses):
+    """Like _hypr_with_pipes but records every dispatch call for assertions."""
+    from voice_opencode.backends.linux_hyprland import wm as hwm
+    monkeypatch.setattr(hwm.shutil, "which", lambda _: "/usr/bin/hyprctl")
+    calls: list[list[str]] = []
+
+    class FakeCompleted:
+        def __init__(self, rc, out, err=""):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_run(cmd, capture_output, text, timeout):
+        if cmd[1] == "-j":
+            key = tuple(cmd[2:])
+            payload = json_responses.get(key, json_responses.get(key[:1]))
+            if payload is None:
+                return FakeCompleted(1, "", f"unmocked: {key}")
+            body = payload if isinstance(payload, str) else json.dumps(payload)
+            return FakeCompleted(0, body)
+        if cmd[1] == "dispatch":
+            calls.append(list(cmd[2:]))
+            return FakeCompleted(0, "ok")
+        return FakeCompleted(1, "", f"unknown cmd: {cmd}")
+
+    monkeypatch.setattr(hwm.subprocess, "run", fake_run)
+    return hwm.HyprlandWindowManager(), calls
+
+
+_BASE = {
+    ("version",): {"branch": "main"},
+    ("activewindow",): "",
+    ("clients",): [
+        {"address": "0xCAFE", "pid": 1, "class": "kitty", "title": "x",
+         "at": [0, 0], "size": [1, 1], "monitor": 0,
+         "workspace": {"id": 3, "name": "3"}},
+    ],
+}
+
+
+def test_focus_window_dispatch(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.focus_window("0xCAFE")
+    assert calls == [["focuswindow", "address:0xCAFE"]]
+
+
+def test_close_window_dispatch(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.close_window("kitty")  # resolve by app_id substring
+    assert calls == [["closewindow", "address:0xCAFE"]]
+
+
+def test_move_window_dispatch(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.move_window("0xCAFE", 100, 200)
+    assert calls == [["movewindowpixel", "exact 100 200", ",address:0xCAFE"]]
+
+
+def test_resize_window_validates_dims(monkeypatch):
+    wm, _ = _hypr_recording(monkeypatch, _BASE)
+    with pytest.raises(BackendError):
+        wm.resize_window("0xCAFE", 0, 200)
+    with pytest.raises(BackendError):
+        wm.resize_window("0xCAFE", 200, -1)
+
+
+def test_resize_window_dispatch(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.resize_window("0xCAFE", 800, 600)
+    assert calls == [["resizewindowpixel", "exact 800 600", ",address:0xCAFE"]]
+
+
+def test_toggle_floating_and_fullscreen(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.toggle_floating("0xCAFE")
+    wm.toggle_fullscreen()         # no target → just dispatch fullscreen 0
+    wm.toggle_fullscreen("0xCAFE") # with target → focus first then fullscreen
+    assert calls == [
+        ["togglefloating", "address:0xCAFE"],
+        ["fullscreen", "0"],
+        ["focuswindow", "address:0xCAFE"],
+        ["fullscreen", "0"],
+    ]
+
+
+def test_minimize_window_uses_special_scratch(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.minimize_window("0xCAFE")
+    assert calls == [["movetoworkspacesilent", "special:scratch,address:0xCAFE"]]
+
+
+def test_switch_and_move_workspace(monkeypatch):
+    wm, calls = _hypr_recording(monkeypatch, _BASE)
+    wm.switch_workspace(5)
+    wm.move_window_to_workspace("0xCAFE", "code")
+    wm.send_workspace_to_monitor("l")
+    assert calls == [
+        ["workspace", "5"],
+        ["movetoworkspacesilent", "code,address:0xCAFE"],
+        ["movecurrentworkspacetomonitor", "l"],
+    ]
+
+
+def test_list_workspaces_marks_active(monkeypatch):
+    wss = [
+        {"id": 1, "name": "1", "monitorID": 0, "windows": 3},
+        {"id": 2, "name": "code", "monitorID": 1, "windows": 1},
+    ]
+    wm = _hypr_with_pipes(monkeypatch, {
+        ("version",): {"branch": "main"},
+        ("workspaces",): wss,
+        ("activeworkspace",): {"id": 2, "name": "code", "monitorID": 1, "windows": 1},
+    })
+    out = wm.list_workspaces()
+    assert [(w.id, w.active) for w in out] == [(1, False), (2, True)]
+    assert wm.active_workspace().name == "code"
