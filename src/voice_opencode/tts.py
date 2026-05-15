@@ -57,7 +57,8 @@ def voice_info(voice: Path) -> VoiceInfo:
             sample_rate=int(data["audio"]["sample_rate"]),
             language=data.get("language", {}).get("name_native", "?"),
         )
-    except Exception:
+    except Exception as e:
+        log(f"Could not parse {cfg}: {e}; using defaults.")
         return VoiceInfo(
             path=voice, dataset=voice.stem, num_speakers=1,
             speakers=[], sample_rate=22050, language="?",
@@ -107,7 +108,12 @@ def clean_for_tts(text: str) -> str:
 
 
 def speak(text: str) -> None:
-    """Synthesise ``text`` with the current voice and play it."""
+    """Synthesise ``text`` with the current voice and play it.
+
+    A wedged ``paplay`` would otherwise freeze the pipeline at
+    ``speaking`` forever; we cap with a generous timeout so the state
+    machine can recover.
+    """
     text = clean_for_tts(text)
     if not text:
         log("Nothing to speak.")
@@ -130,19 +136,42 @@ def speak(text: str) -> None:
         "--channels=1",
     ]
 
-    piper = subprocess.Popen(
-        piper_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=open(LOGS_DIR / "piper.log", "ab"),
-    )
-    player = subprocess.Popen(
-        player_cmd,
-        stdin=piper.stdout,
-        stderr=open(LOGS_DIR / "player.log", "ab"),
-    )
-    assert piper.stdin is not None
-    piper.stdin.write(text.encode("utf-8"))
-    piper.stdin.close()
-    player.wait()
-    piper.wait()
+    # Open log files for the lifetime of the child processes only, then close.
+    piper_log = (LOGS_DIR / "piper.log").open("ab")
+    player_log = (LOGS_DIR / "player.log").open("ab")
+    try:
+        piper = subprocess.Popen(
+            piper_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=piper_log,
+        )
+        player = subprocess.Popen(
+            player_cmd,
+            stdin=piper.stdout,
+            stderr=player_log,
+        )
+        # Free our copy of piper.stdout so the player gets EOF on piper exit.
+        if piper.stdout is not None:
+            piper.stdout.close()
+        assert piper.stdin is not None
+        try:
+            piper.stdin.write(text.encode("utf-8"))
+        finally:
+            piper.stdin.close()
+        # 60s should cover any sane reply length.
+        try:
+            player.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            log("paplay timed out; killing TTS chain.")
+            player.kill()
+            piper.kill()
+        try:
+            piper.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            piper.kill()
+        if piper.returncode not in (0, None):
+            log(f"piper exit code {piper.returncode}")
+    finally:
+        piper_log.close()
+        player_log.close()

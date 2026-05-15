@@ -87,7 +87,7 @@ def cmd_session(args: list[str]) -> int:
         Session.forget()
         log("Session forgotten.")
         notify("🆕 Sesión reiniciada", "")
-    elif sub == "status":
+    elif sub in ("status", "id"):
         sid = Session.current_id()
         print(sid or "<none>")
     else:
@@ -132,10 +132,19 @@ def cmd_ask(args: list[str]) -> int:
         return 1
     msg = " ".join(args)
     shot = screenshot.capture()
-    reply = Session.get_or_create().ask(msg, screenshot=shot)
+    try:
+        reply = Session.get_or_create().ask(msg, screenshot=shot)
+    except Exception as e:
+        _eprint(f"opencode error: {e}")
+        notify("❌ opencode", str(e)[:200], urgency="critical")
+        return 1
     print(reply)
     if not no_tts:
-        tts.speak(reply)
+        try:
+            tts.speak(reply)
+        except Exception as e:
+            _eprint(f"TTS error: {e}")
+            return 1
     return 0
 
 

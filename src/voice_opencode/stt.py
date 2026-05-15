@@ -42,7 +42,11 @@ def transcribe(wav: Path) -> str:
         "-f", str(wav),
     ]
     log(f"Transcribing… ({' '.join(cmd)})")
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired as e:
+        log(f"whisper timed out after {e.timeout}s")
+        raise RuntimeError("whisper timeout") from e
     if res.returncode != 0:
         log(f"whisper stderr: {res.stderr}")
         raise RuntimeError("whisper failed")

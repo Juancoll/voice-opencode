@@ -76,7 +76,11 @@ def capture_to(out_path: Path, scope: str = "monitor") -> Path | None:
             x, y, w, h = geom
             cmd += ["-g", f"{x},{y} {w}x{h}"]
     cmd.append(str(out_path))
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        log("grim timed out")
+        return None
     if r.returncode != 0:
         log(f"grim failed: {r.stderr.strip()}")
         return None

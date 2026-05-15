@@ -250,9 +250,10 @@ class VoiceTray(QSystemTrayIcon):
         }
         suffix = "" if server else "  (servidor caído)"
         self.status_action.setText(f"estado: {labels.get(effective, effective)}{suffix}")
-        self.session_action.setText(
-            f"session: {session[:20]+'…' if session else '—'}"
-        )
+        sid_text = "—"
+        if isinstance(session, str) and session:
+            sid_text = session[:20] + ("…" if len(session) > 20 else "")
+        self.session_action.setText(f"session: {sid_text}")
         self.voice_action.setText(f"voice: {voice}")
         self.agent_status.setText("agente: 🤖 activo" if agent_on else "agente: —")
 

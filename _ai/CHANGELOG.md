@@ -5,6 +5,35 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-15 — Audit fixes, robust subprocess handling, icons for dark/light
+
+- Auditoría aplicada (CRITICAL + HIGH):
+  - `agent.is_active()`: maneja sentinel vacío/corrupto y `pid <= 0` como
+    "released" en vez de "alive forever"; limpia `AGENT_FILE` en cada caso.
+  - `agent.audit()`: timestamps ISO-8601 UTC con `Z` (antes hora local
+    ambigua).
+  - `cli.cmd_session`: añadido alias `id` para `voice session id` (estaba
+    documentado pero no implementado).
+  - `cli.cmd_ask`: captura excepciones de `Session.get_or_create()` y
+    `tts.speak()`, notifica al usuario y devuelve exit code != 0.
+  - `config._coerce`: errores de casting incluyen el nombre de la clave;
+    `int()` envuelto para mensajes claros.
+  - `stt.transcribe`: timeout de 120 s a `whisper-cli` (antes podía
+    colgar la pipeline indefinidamente).
+  - `tts.speak`: timeout de 60 s a `paplay`, cierra fds de log
+    correctamente, mata la cadena piper→paplay si se cuelga.
+  - `screenshot.capture`: maneja `TimeoutExpired` de `grim` sin propagar.
+  - `audio.start_recording` / `tts.speak`: cierran nuestro fd del log
+    tras `Popen` (el hijo conserva su copia); evita fd leak.
+  - `tray._update_menu`: guarda defensiva contra `session` no-`str`,
+    elipsis sólo si la cadena se trunca.
+  - `tts.voice_info`: log explícito al fallback con la causa.
+- Bump `__version__` a `0.3.0` (alineado con `pyproject.toml`).
+- Iconos rediseñados con `fill="#ffffff"` + `stroke="#202124"` para que
+  el micrófono sea visible tanto en barras claras como oscuras
+  (DankMaterialShell light theme mostraba el icono casi invisible).
+- 33 tests verde, ruff verde, mypy verde (18 source files).
+
 ## 2026-05-15 — Docs, installer polish, initial commit
 - Wrote all SKILLS recipes (`add-cli-command`, `add-voice`,
   `add-config-key`, `add-tray-menu-item`, `debug-tray`, `debug-pipeline`,

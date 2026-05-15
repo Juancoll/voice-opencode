@@ -31,11 +31,18 @@ def is_active() -> bool:
     if not AGENT_FILE.exists():
         return False
     try:
-        pid = int(AGENT_FILE.read_text().strip() or "0")
-    except Exception:
+        raw = AGENT_FILE.read_text().strip()
+        if not raw:
+            # Half-written or corrupt sentinel: treat as released.
+            AGENT_FILE.unlink(missing_ok=True)
+            return False
+        pid = int(raw)
+    except (ValueError, OSError):
+        AGENT_FILE.unlink(missing_ok=True)
         return False
     if pid <= 0:
-        return True
+        AGENT_FILE.unlink(missing_ok=True)
+        return False
     # Best effort: stale lock cleanup if the holder died.
     try:
         os.kill(pid, 0)
@@ -44,6 +51,8 @@ def is_active() -> bool:
         AGENT_FILE.unlink(missing_ok=True)
         return False
     except PermissionError:
+        # Another user owns the pid (shouldn't happen in single-user box,
+        # but be conservative — treat as alive).
         return True
 
 
@@ -77,7 +86,7 @@ def audit(tool: str, args: dict[str, Any], result: str = "ok") -> None:
         AGENT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(
             {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "tool": tool,
                 "args": args,
                 "result": result,

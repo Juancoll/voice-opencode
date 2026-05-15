@@ -68,14 +68,19 @@ ENV_MAP: Final[dict[str, str]] = {
 # ---------------------------------------------------------------------------
 # Loaders
 # ---------------------------------------------------------------------------
-def _coerce(raw: Any, default: Any) -> Any:
+def _coerce(raw: Any, default: Any, key: str = "") -> Any:
     """Cast a value (str|bool|int) to the type of ``default``."""
     if isinstance(default, bool):
         if isinstance(raw, bool):
             return raw
         return str(raw).lower() in ("1", "true", "yes", "on")
     if isinstance(default, int):
-        return int(raw)
+        try:
+            return int(raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"Config key {key!r} must be an integer (got {raw!r})"
+            ) from e
     return raw  # str passthrough
 
 
@@ -97,9 +102,9 @@ def load() -> Settings:
         default = getattr(DEFAULTS, f.name)
         env_name = ENV_MAP.get(f.name)
         if env_name and env_name in os.environ:
-            values[f.name] = _coerce(os.environ[env_name], default)
+            values[f.name] = _coerce(os.environ[env_name], default, f.name)
         elif f.name in user:
-            values[f.name] = _coerce(user[f.name], default)
+            values[f.name] = _coerce(user[f.name], default, f.name)
         else:
             values[f.name] = default
     return Settings(**values)
@@ -136,7 +141,7 @@ def set_value(key: str, raw_value: str) -> Any:
     """
     if not hasattr(DEFAULTS, key):
         raise KeyError(f"Unknown config key: {key}")
-    parsed = _coerce(raw_value, getattr(DEFAULTS, key))
+    parsed = _coerce(raw_value, getattr(DEFAULTS, key), key)
     current = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
     current[key] = parsed
     CONFIG_FILE.write_text(

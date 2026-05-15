@@ -52,12 +52,17 @@ def start() -> None:
         "-t", "wav",
         str(REC_WAV_FILE),
     ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=open(LOGS_DIR / "arecord.log", "ab"),
-        start_new_session=True,
-    )
+    arecord_log = (LOGS_DIR / "arecord.log").open("ab")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=arecord_log,
+            start_new_session=True,
+        )
+    finally:
+        # Child inherits the fd; we can drop our copy.
+        arecord_log.close()
     REC_PID_FILE.write_text(str(proc.pid))
     log(f"Recording started (pid={proc.pid}).")
 
