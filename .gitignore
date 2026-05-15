@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+
+# venv
+venv/
+
+# Big binary assets — re-downloadable via install.sh / download-voice.sh
+models/*.bin
+voices/*.onnx
+voices/*.onnx.json
+
+# Runtime
+logs/
+config.json
+
+# Editor
+.vscode/
+.idea/
+*.swp

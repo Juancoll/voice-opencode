@@ -1,0 +1,15 @@
+[Unit]
+Description=opencode headless server (for voice-opencode)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/opencode serve --port 4096 --hostname 127.0.0.1
+Restart=on-failure
+RestartSec=3
+# Optional: set the working directory to the project you want voice-opencode
+# to operate on by default. Change this to your usual project root.
+WorkingDirectory=%h
+
+[Install]
+WantedBy=default.target

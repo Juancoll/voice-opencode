@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- White mic with red exclamation badge -->
+  <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" fill="#ffffff"/>
+  <path d="M5 11a1 1 0 0 1 2 0 5 5 0 0 0 10 0 1 1 0 0 1 2 0 7 7 0 0 1-6 6.93V20h2a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2h2v-2.07A7 7 0 0 1 5 11z" fill="#ffffff"/>
+  <circle cx="18" cy="6" r="5" fill="#e53935"/>
+  <text x="18" y="9.2" font-size="8" font-weight="bold" font-family="sans-serif" text-anchor="middle" fill="#ffffff">!</text>
+</svg>

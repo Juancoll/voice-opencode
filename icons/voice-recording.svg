@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- Microphone recording (red filled, white inside) -->
+  <circle cx="12" cy="12" r="11" fill="#e53935"/>
+  <path d="M12 5a2.2 2.2 0 0 0-2.2 2.2v4.6a2.2 2.2 0 0 0 4.4 0V7.2A2.2 2.2 0 0 0 12 5z" fill="#ffffff"/>
+  <path d="M7 11.5a.8.8 0 0 1 1.6 0 3.4 3.4 0 0 0 6.8 0 .8.8 0 0 1 1.6 0 5 5 0 0 1-4.2 4.94V18h1.4a.8.8 0 0 1 0 1.6H9.8a.8.8 0 0 1 0-1.6h1.4v-1.56A5 5 0 0 1 7 11.5z" fill="#ffffff"/>
+</svg>

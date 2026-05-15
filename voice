@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# voice — wrapper around the voice_opencode package using the project venv.
+#
+# Kept at the repo root so existing Hyprland binds and the .desktop file
+# don't need to change. All argument forwarding is verbatim; the CLI in
+# src/voice_opencode/cli.py understands both the new grouped commands
+# (rec start, desktop type, …) and the legacy flat aliases (start, type, …).
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+export PYTHONPATH="$DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+exec "$DIR/venv/bin/python" -m voice_opencode "$@"

@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-opencode"
+version = "0.2.0"
+description = "Push-to-talk voice interface for opencode (whisper.cpp + piper + Hyprland)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Juan" }]
+dependencies = [
+    "requests>=2.31",
+    "PyQt6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-requests",
+]
+
+[project.scripts]
+voice-opencode      = "voice_opencode.cli:main"
+voice-opencode-tray = "voice_opencode.tray:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # isort
+    "B",             # bugbear
+    "UP",            # pyupgrade
+    "SIM",           # simplify
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "B008",   # function calls in defaults are fine for our CLI
+    "SIM105", # `contextlib.suppress` is not always clearer than try/except/pass
+    "SIM115", # we deliberately keep file handles for subprocess.Popen stderr=
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false                # opt-in to strict per-module as we cleanup
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+ignore_missing_imports = true   # PyQt6 stubs are partial
+files = ["src/voice_opencode"]
+
+[[tool.mypy.overrides]]
+# PyQt6 stubs don't model `checkable=True` kwarg on QAction; ignore.
+module = "voice_opencode.tray"
+disable_error_code = ["call-overload"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

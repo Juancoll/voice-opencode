@@ -1,0 +1,334 @@
+"""
+Command-line interface for voice-opencode.
+
+Two surfaces share the same backend:
+
+* **New grouped CLI** — what we recommend going forward::
+
+      voice rec start | stop | toggle | status
+      voice tray
+      voice session reset | status
+      voice tts say "hola" | voices
+      voice ask "..." [--no-tts]
+      voice config show | init | set <k> <v> | path | get <k>
+      voice state                      (JSON for the tray)
+      voice pause | resume
+      voice desktop type "..." | key <combo> | click [btn] [x y]
+                    | move <x> <y> | capture [scope] [path] | focused
+
+* **Legacy flat aliases** — preserved so existing Hyprland binds and
+  scripts keep working without changes. They print a deprecation hint
+  to stderr only when ``VOICE_DEPRECATION_WARN=1`` so we don't spam logs.
+
+      voice start | stop | toggle | reset | status | voices | say | ask
+      voice type | key | click | move | capture | focused
+
+The dispatcher is hand-rolled rather than ``argparse`` subparsers because
+we need to (a) accept the legacy flat layout and (b) pass arbitrary
+trailing strings (for ``say "hola que tal"``) without quoting tricks.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from collections.abc import Callable
+from pathlib import Path
+
+from . import audio, config, desktop, paths, pipeline, screenshot, state, tts
+from .logging import log
+from .notify import notify
+from .opencode_client import Session, health
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _eprint(*a: object) -> None:
+    print(*a, file=sys.stderr)
+
+
+def _deprecated(old: str, new: str) -> None:
+    if os.environ.get("VOICE_DEPRECATION_WARN") == "1":
+        _eprint(f"[voice] '{old}' is deprecated, use '{new}'")
+
+
+def _usage(rc: int = 1) -> int:
+    _eprint(__doc__ or "")
+    return rc
+
+
+# ---------------------------------------------------------------------------
+# Command implementations (UI-agnostic)
+# ---------------------------------------------------------------------------
+def cmd_rec(args: list[str]) -> int:
+    if not args:
+        _eprint("Usage: voice rec [start|stop|toggle|status]")
+        return 1
+    sub = args[0]
+    if sub == "start":
+        pipeline.start_recording()
+    elif sub == "stop":
+        pipeline.stop_and_run()
+    elif sub == "toggle":
+        pipeline.toggle()
+    elif sub == "status":
+        print("recording:", audio.is_recording())
+    else:
+        _eprint(f"Unknown: rec {sub}")
+        return 1
+    return 0
+
+
+def cmd_session(args: list[str]) -> int:
+    sub = args[0] if args else "status"
+    if sub == "reset":
+        Session.forget()
+        log("Session forgotten.")
+        notify("🆕 Sesión reiniciada", "")
+    elif sub == "status":
+        sid = Session.current_id()
+        print(sid or "<none>")
+    else:
+        _eprint(f"Unknown: session {sub}")
+        return 1
+    return 0
+
+
+def cmd_tts(args: list[str]) -> int:
+    if not args:
+        _eprint("Usage: voice tts [say <text>|voices]")
+        return 1
+    sub, rest = args[0], args[1:]
+    if sub == "say":
+        tts.speak(" ".join(rest))
+    elif sub == "voices":
+        _print_voices()
+    else:
+        _eprint(f"Unknown: tts {sub}")
+        return 1
+    return 0
+
+
+def _print_voices() -> None:
+    cur = tts.current_voice().stem
+    print(f"Voices in {paths.VOICES_DIR}:")
+    for v in tts.list_voices():
+        mark = "*" if v.stem == cur else " "
+        speakers = ",".join(v.speakers) if v.speakers else "single"
+        print(f"{mark} {v.stem:35s} speakers={speakers:10s} {v.sample_rate} Hz")
+    print(f"\nCurrent: {cur} (speaker_id={config.settings.speaker_id})")
+    print("Change permanently:  ./voice config set voice <NAME>")
+    print("Add a new voice:     ./download-voice.sh <lang>/<region>/<name>/<quality>")
+
+
+def cmd_ask(args: list[str]) -> int:
+    no_tts = "--no-tts" in args
+    if no_tts:
+        args = [a for a in args if a != "--no-tts"]
+    if not args:
+        _eprint("Usage: voice ask <text...> [--no-tts]")
+        return 1
+    msg = " ".join(args)
+    shot = screenshot.capture()
+    reply = Session.get_or_create().ask(msg, screenshot=shot)
+    print(reply)
+    if not no_tts:
+        tts.speak(reply)
+    return 0
+
+
+def cmd_config(args: list[str]) -> int:
+    sub = args[0] if args else "show"
+    if sub == "show":
+        print(json.dumps(config.as_dict(), indent=2, ensure_ascii=False))
+    elif sub == "init":
+        try:
+            config.write_defaults()
+            print(f"Wrote defaults to {paths.CONFIG_FILE}")
+        except FileExistsError as e:
+            _eprint(str(e))
+            return 1
+    elif sub == "set" and len(args) >= 3:
+        key, val = args[1], args[2]
+        try:
+            parsed = config.set_value(key, val)
+            print(f"Set {key} = {parsed}  →  {paths.CONFIG_FILE}")
+        except KeyError as e:
+            _eprint(str(e))
+            return 1
+    elif sub == "get" and len(args) >= 2:
+        d = config.as_dict()
+        if args[1] not in d:
+            _eprint(f"Unknown key: {args[1]}")
+            return 1
+        print(d[args[1]])
+    elif sub == "path":
+        print(paths.CONFIG_FILE)
+    else:
+        _eprint("Usage: voice config [show|init|get <k>|set <k> <v>|path]")
+        return 1
+    return 0
+
+
+def cmd_state(_: list[str]) -> int:
+    sid = Session.current_id()
+    out = {
+        "state":      state.get_state(),
+        "paused":     state.is_paused(),
+        "recording":  audio.is_recording(),
+        "server":     health(),
+        "session":    sid,
+        "voice":      config.settings.voice,
+        "speaker_id": config.settings.speaker_id,
+        "screenshot": config.settings.screenshot,
+        "context":    config.settings.keep_context,
+    }
+    print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
+def cmd_pause(_: list[str]) -> int:
+    state.set_paused(True)
+    log("Paused.")
+    notify("⏸  Voice en pausa", "F9 ignorado hasta que reanudes")
+    return 0
+
+
+def cmd_resume(_: list[str]) -> int:
+    state.set_paused(False)
+    log("Resumed.")
+    notify("▶  Voice reanudado", "")
+    return 0
+
+
+def cmd_tray(_: list[str]) -> int:
+    # Re-exec into the tray module, replacing this process.
+    os.execv(sys.executable, [sys.executable, "-m", "voice_opencode.tray"])
+
+
+def cmd_status(_: list[str]) -> int:
+    s = config.settings
+    print("recording:       ", audio.is_recording())
+    print("server:          ", "up" if health() else "down")
+    print("session:         ", Session.current_id() or "<none>")
+    print()
+    print("voice:           ", s.voice, f"(speaker_id={s.speaker_id})")
+    print("whisper model:   ", s.whisper_model, f"(lang={s.whisper_lang})")
+    print("keep context:    ", s.keep_context)
+    print("screenshot:      ", s.screenshot, f"(scope={s.screenshot_scope})")
+    print("notify:          ", s.notify)
+    print()
+    exists = "(exists)" if paths.CONFIG_FILE.exists() else "(missing — using defaults)"
+    print(f"config file:      {paths.CONFIG_FILE} {exists}")
+    return 0
+
+
+# ---- desktop subgroup -------------------------------------------------------
+def cmd_desktop(args: list[str]) -> int:
+    if not args:
+        _eprint("Usage: voice desktop [type|key|click|move|capture|focused] ...")
+        return 1
+    sub, rest = args[0], args[1:]
+    if sub == "type":
+        if not rest:
+            _eprint("Usage: voice desktop type <text...>")
+            return 1
+        desktop.type_text(" ".join(rest))
+    elif sub == "key":
+        if not rest:
+            _eprint("Usage: voice desktop key <combo>   e.g. Tab | ctrl+a")
+            return 1
+        desktop.press_key(rest[0])
+    elif sub == "click":
+        button = "left"
+        if rest and rest[0] in ("left", "right", "middle"):
+            button = rest.pop(0)
+        if len(rest) == 2:
+            desktop.click_mouse(button, int(rest[0]), int(rest[1]))
+        elif not rest:
+            desktop.click_mouse(button)
+        else:
+            _eprint("Usage: voice desktop click [left|right|middle] [x y]")
+            return 1
+    elif sub == "move":
+        if len(rest) != 2:
+            _eprint("Usage: voice desktop move <x> <y>")
+            return 1
+        desktop.move_mouse(int(rest[0]), int(rest[1]))
+    elif sub == "capture":
+        scope = "monitor"
+        if rest and rest[0] in ("monitor", "all", "window"):
+            scope = rest.pop(0)
+        out = Path(rest[0]) if rest else paths.SCREENSHOT_FILE
+        result = screenshot.capture_to(out, scope=scope)
+        if result:
+            print(result)
+            return 0
+        return 1
+    elif sub == "focused":
+        print(json.dumps(desktop.focused_window(), ensure_ascii=False, indent=2))
+    else:
+        _eprint(f"Unknown: desktop {sub}")
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Dispatch table
+# ---------------------------------------------------------------------------
+COMMANDS: dict[str, Callable[[list[str]], int]] = {
+    # New grouped layout
+    "rec":      cmd_rec,
+    "session":  cmd_session,
+    "tts":      cmd_tts,
+    "ask":      cmd_ask,
+    "config":   cmd_config,
+    "state":    cmd_state,
+    "pause":    cmd_pause,
+    "resume":   cmd_resume,
+    "tray":     cmd_tray,
+    "status":   cmd_status,
+    "desktop":  cmd_desktop,
+}
+
+# Legacy flat aliases — preserved for Hyprland binds and muscle memory.
+LEGACY: dict[str, tuple[str, list[str]]] = {
+    "start":    ("rec",     ["start"]),
+    "stop":     ("rec",     ["stop"]),
+    "toggle":   ("rec",     ["toggle"]),
+    "reset":    ("session", ["reset"]),
+    "voices":   ("tts",     ["voices"]),
+    "say":      ("tts",     ["say"]),       # extra args appended by dispatcher
+    "type":     ("desktop", ["type"]),
+    "key":      ("desktop", ["key"]),
+    "click":    ("desktop", ["click"]),
+    "move":     ("desktop", ["move"]),
+    "capture":  ("desktop", ["capture"]),
+    "focused":  ("desktop", ["focused"]),
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    paths.ensure_dirs()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        return _usage()
+
+    head, rest = argv[0], argv[1:]
+
+    if head in LEGACY:
+        new_head, prefix = LEGACY[head]
+        _deprecated(head, f"{new_head} {prefix[0]}")
+        return COMMANDS[new_head](prefix + rest)
+
+    if head in COMMANDS:
+        return COMMANDS[head](rest)
+
+    _eprint(f"Unknown command: {head}")
+    return _usage()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())
