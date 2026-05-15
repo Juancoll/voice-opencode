@@ -114,6 +114,10 @@ class VoiceTray(QSystemTrayIcon):
         m.addAction(self.pause_action)
 
         m.addSeparator()
+        self.agent_status = self._info(m, "agente: —")
+        self._action(m, "Detener agente (MCP)", lambda: voice_cmd("mcp", "stop"))
+
+        m.addSeparator()
 
         self.voice_menu = QMenu("Cambiar voz", m)
         self.voice_group = QActionGroup(self.voice_menu)
@@ -216,6 +220,7 @@ class VoiceTray(QSystemTrayIcon):
             return
 
         paused  = bool(st.get("paused"))
+        agent_on = bool(st.get("agent"))
         phase   = st.get("state", "idle")
         server  = bool(st.get("server"))
         session = st.get("session")
@@ -223,10 +228,16 @@ class VoiceTray(QSystemTrayIcon):
         shot_on = bool(st.get("screenshot"))
         ctx_on  = bool(st.get("context"))
 
-        # Effective icon: paused wins over idle, error overrides everything.
-        effective = "paused" if (paused and phase == "idle") else phase
+        # Effective icon: error > thinking (agent acts) > paused > phase.
         if not server:
             effective = "error"
+        elif agent_on:
+            # Agent in control: surface as 'thinking' so the user sees activity.
+            effective = "thinking"
+        elif paused and phase == "idle":
+            effective = "paused"
+        else:
+            effective = phase
         self._set_icon_state(effective)
 
         labels = {
@@ -243,6 +254,7 @@ class VoiceTray(QSystemTrayIcon):
             f"session: {session[:20]+'…' if session else '—'}"
         )
         self.voice_action.setText(f"voice: {voice}")
+        self.agent_status.setText("agente: 🤖 activo" if agent_on else "agente: —")
 
         for action, value in (
             (self.pause_action, paused),

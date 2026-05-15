@@ -28,5 +28,8 @@ def tmp_state(tmp_path, monkeypatch):
     import voice_opencode.state as state_mod
     importlib.reload(state_mod)
 
+    import voice_opencode.agent as agent_mod
+    importlib.reload(agent_mod)
+
     paths_mod.ensure_dirs()
     return paths_mod

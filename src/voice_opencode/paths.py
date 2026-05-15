@@ -37,6 +37,8 @@ SERVER_FILE: Path = STATE_DIR / "server.url"
 PAUSE_FILE: Path = STATE_DIR / "paused"
 STATE_FILE: Path = STATE_DIR / "state"
 SCREENSHOT_FILE: Path = STATE_DIR / "screen.png"
+AGENT_FILE: Path = STATE_DIR / "agent"          # presence = MCP agent has control
+AGENT_LOG_FILE: Path = PROJECT_ROOT / "logs" / "agent.log"
 
 
 def ensure_dirs() -> None:

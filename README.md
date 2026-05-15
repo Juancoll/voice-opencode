@@ -150,7 +150,7 @@ voice tray              # launch the PyQt6 system tray icon
 ### Desktop control building blocks
 
 These wrap `wtype` (text/keys) and `ydotool` (mouse/clicks). They are the
-primitives the future MCP server (Phase 3) will expose to opencode.
+primitives the MCP server exposes to opencode.
 
 ```bash
 voice desktop type "hola juan"           # alias: voice type ...
@@ -160,6 +160,43 @@ voice desktop move 1200 300
 voice desktop capture window /tmp/w.png  # screenshot focused window/monitor/screen
 voice desktop focused                    # JSON of active window
 ```
+
+### MCP server (Phase 3 — agentic desktop control)
+
+```bash
+voice mcp serve              # run the MCP server (opencode launches this for you)
+voice mcp status             # is an agent currently acting?
+voice mcp stop               # kill any running mcp processes, release the lock
+voice mcp log -n 20          # tail the audit log (logs/agent.log)
+```
+
+`install.sh` registers the server in `~/.config/opencode/opencode.json`
+as `voice_desktop`. Tools surface to the model as
+`voice_desktop_<name>` (e.g. `voice_desktop_capture_screen`,
+`voice_desktop_click_mouse`).
+
+The model has 8 tools:
+
+| Tool                | Acts? | Description                                |
+|---------------------|-------|--------------------------------------------|
+| `type_text`         | yes   | type literal text into focused window      |
+| `press_key`         | yes   | press a key combo (with safety blocklist)  |
+| `move_mouse`        | yes   | move cursor to absolute (x, y)             |
+| `click_mouse`       | yes   | left/right/middle click, optional move     |
+| `focused_window`    | no    | Hyprland active window JSON                |
+| `capture_screen`    | no    | screenshot to a path; returns {path,bytes} |
+| `list_monitors`     | no    | Hyprland monitors with geometry            |
+| `sleep_ms`          | no    | wait for a UI to settle (max 5000 ms)      |
+
+Safety rails:
+
+- Hard blocklist for dangerous combos
+  (`ctrl+alt+backspace`, `ctrl+alt+f1..f12`, `alt+sysrq`).
+- Rate limit: 30 calls / 5 s per server instance.
+- "Acting" tools (the four marked above) hold a desktop lock that
+  blocks F9 while they're running, so you can interrupt by pulling the
+  plug (`voice mcp stop` or the tray menu).
+- Every call is appended to `logs/agent.log` as JSON Lines.
 
 ### Tray icon
 

@@ -34,6 +34,7 @@ session. Refresh this whenever something material changes.
 
 - `requests` — HTTP to opencode serve
 - `PyQt6` — system tray
+- `mcp` — MCP server SDK (FastMCP)
 - `pytest`, `ruff`, `mypy`, `types-requests` (dev only)
 
 ## Models and voices
@@ -75,9 +76,35 @@ session. Refresh this whenever something material changes.
 - `rec.wav`     — last raw capture
 - `state`       — current pipeline phase (`idle|recording|thinking|speaking|error`)
 - `paused`      — sentinel; if present, F9 is ignored
+- `agent`       — sentinel; if present, MCP tool is currently acting (F9 also ignored)
 - `session.id`  — opencode session uuid
 - `server.url`  — (reserved for future use)
 - `screen.png`  — last screenshot sent to opencode
+
+Plus, in the repo:
+
+- `logs/agent.log` — JSON-Lines audit of every MCP tool invocation
+
+## opencode integration
+
+`~/.config/opencode/opencode.json` registers our MCP server as
+`voice_desktop`:
+
+```json
+{
+  "mcp": {
+    "voice_desktop": {
+      "type": "local",
+      "command": ["/home/juan/gitr/voice-opencode/voice", "mcp", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+
+opencode launches the subprocess on-demand and keeps it alive between
+messages. Tools surface to the model as `voice_desktop_<name>`
+(e.g. `voice_desktop_list_monitors`).
 
 ## Known quirks
 

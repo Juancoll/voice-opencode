@@ -12,6 +12,7 @@
 #   5. systemd --user services (opencode-serve, ydotool)
 #   6. .desktop launcher in app menu
 #   7. Hyprland binds + tray autostart (only if not present)
+#   8. opencode MCP integration (voice_desktop server)
 
 set -euo pipefail
 
@@ -85,8 +86,8 @@ else
     ok "venv already exists."
 fi
 ./venv/bin/pip install --quiet --upgrade pip
-./venv/bin/pip install --quiet requests PyQt6
-ok "runtime deps installed (requests, PyQt6)."
+./venv/bin/pip install --quiet requests PyQt6 mcp
+ok "runtime deps installed (requests, PyQt6, mcp)."
 
 # Install the package itself in editable mode so `python -m voice_opencode` works
 # without needing the wrapper's PYTHONPATH=src trick when imported elsewhere.
@@ -197,6 +198,34 @@ fi
 
 ensure_line "$HYPR_AUTO" "exec-once = $ROOT/voice tray"
 ok "Tray autostart present in $HYPR_AUTO"
+
+# ---------- 8. opencode MCP integration -------------------------------------
+log "Wiring opencode MCP integration…"
+OC_CFG_DIR="$HOME/.config/opencode"
+OC_CFG="$OC_CFG_DIR/opencode.json"
+mkdir -p "$OC_CFG_DIR"
+
+if [[ ! -f "$OC_CFG" ]]; then
+    cat > "$OC_CFG" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "voice_desktop": {
+      "type": "local",
+      "command": ["$ROOT/voice", "mcp", "serve"],
+      "enabled": true
+    }
+  }
+}
+EOF
+    ok "Created $OC_CFG with voice_desktop MCP server."
+elif ! grep -q '"voice_desktop"' "$OC_CFG"; then
+    warn "$OC_CFG exists but doesn't reference voice_desktop."
+    warn "Add this to its 'mcp' object manually:"
+    warn '    "voice_desktop": {"type":"local","command":["'"$ROOT"'/voice","mcp","serve"],"enabled":true}'
+else
+    ok "voice_desktop already present in $OC_CFG"
+fi
 
 # ---------- done -------------------------------------------------------------
 echo

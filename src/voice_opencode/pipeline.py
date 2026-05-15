@@ -9,20 +9,21 @@ doesn't leave the state machine stuck.
 
 from __future__ import annotations
 
-from . import audio, stt, tts
+from . import agent, audio, stt, tts
 from .logging import log
 from .notify import notify
 from .opencode_client import Session
 from .screenshot import capture
-from .state import is_paused, set_state
+from .state import set_state
 
 
 # ---------------------------------------------------------------------------
 def start_recording() -> None:
     """Begin recording unless paused or already running."""
-    if is_paused():
-        log("Paused — ignoring start.")
-        notify("⏸  En pausa", "El icono del tray está en pausa", urgency="low")
+    if agent.is_blocking():
+        why = "agent activo" if agent.is_active() else "en pausa"
+        log(f"Blocked — ignoring start ({why}).")
+        notify(f"⏸  {why.capitalize()}", "F9 ignorado", urgency="low")
         return
     audio.start()
     set_state("recording")

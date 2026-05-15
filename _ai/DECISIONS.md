@@ -5,6 +5,74 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0011 — MCP server with per-call agent lock
+**Date:** 2026-05-15
+
+**Context.** Phase 3 needed opencode to drive the desktop. We had the
+primitives (`desktop.py`) but no protocol. The Model Context Protocol
+(MCP) is the de-facto way to expose tools to LLM clients, and opencode
+supports local MCP servers via stdio out of the box.
+
+Two questions had to be answered:
+
+1. **One generic tool or many small ones?**
+2. **When does the agent "have control" of the desktop?**
+
+**Decision.**
+
+1. **Many small tools** (`type_text`, `press_key`, `move_mouse`,
+   `click_mouse`, `focused_window`, `capture_screen`, `list_monitors`,
+   `sleep_ms`). The model autocompletes them better than a generic
+   `do(action, args)`. Tool schemas come from Python type hints via
+   `FastMCP` (`mcp.server.fastmcp`).
+
+2. **Per-call lock** (`agent.acquire/release` wrapped in an `_acting()`
+   context manager), not server-lifetime. Reasoning: opencode keeps the
+   stdio MCP subprocess alive between user messages — if the lock were
+   server-lifetime, F9 would be blocked all the time. Holding the lock
+   only during *acting* tools (type/key/click/move) lets the user
+   interleave voice prompts with agent action and keeps the tray icon
+   honest about who's currently driving.
+
+**Safety rails (mandatory).**
+
+- Hard blocklist of dangerous combos (`ctrl+alt+backspace`,
+  `ctrl+alt+f1..f12`, `alt+sysrq`, `ctrl+alt+delete`).
+- Rate limit: 30 calls / 5 s per server instance, returned as an error
+  string so the model can back off rather than crash.
+- Audit log to `logs/agent.log` (JSON Lines) for every call.
+- Read-only tools (`focused_window`, `capture_screen`, `list_monitors`)
+  do not take the lock — they shouldn't disrupt the user.
+
+**Alternatives.**
+
+- HTTP/SSE transport — opencode's local config expects stdio; SSE adds
+  complexity for no win on a same-host setup.
+- Hold the lock for the whole server lifetime — rejected (see above).
+- One mega-tool `do(...)` — rejected for tool-discovery reasons.
+- Confirm-before-act prompt for every action — too noisy. Instead we
+  rely on the rate limit, the kill-switch (`voice mcp stop` + tray
+  menu item), and F9 being blocked during acting calls so the user can
+  pull the plug fast.
+
+**Consequences.**
+
+- New runtime dep: `mcp` Python SDK (≥ 1.27).
+- New module pair: `agent.py` (lock + audit) and `mcp_server.py` (tool
+  registration + safety guards).
+- New CLI subgroup `voice mcp serve|status|stop|log`.
+- New state file `$XDG_RUNTIME_DIR/voice-opencode/agent` (presence
+  means an MCP tool is currently acting).
+- Tray gained an "agent: 🤖 activo" status line and a "Detener agente
+  (MCP)" action.
+- `pipeline.start_recording` now consults `agent.is_blocking()`
+  (which combines pause + agent lock) instead of `state.is_paused()`.
+- opencode global config (`~/.config/opencode/opencode.json`) registers
+  the server as `voice_desktop` so tools surface as
+  `voice_desktop_<tool>`.
+
+---
+
 ## ADR-0010 — Modular package layout under `src/`
 **Date:** 2026-05-15
 

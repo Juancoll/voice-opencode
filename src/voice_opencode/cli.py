@@ -36,7 +36,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import audio, config, desktop, paths, pipeline, screenshot, state, tts
+from . import agent, audio, config, desktop, paths, pipeline, screenshot, state, tts
 from .logging import log
 from .notify import notify
 from .opencode_client import Session, health
@@ -177,6 +177,7 @@ def cmd_state(_: list[str]) -> int:
     out = {
         "state":      state.get_state(),
         "paused":     state.is_paused(),
+        "agent":      agent.is_active(),
         "recording":  audio.is_recording(),
         "server":     health(),
         "session":    sid,
@@ -223,6 +224,62 @@ def cmd_status(_: list[str]) -> int:
     exists = "(exists)" if paths.CONFIG_FILE.exists() else "(missing — using defaults)"
     print(f"config file:      {paths.CONFIG_FILE} {exists}")
     return 0
+
+
+# ---- mcp subgroup -----------------------------------------------------------
+def cmd_mcp(args: list[str]) -> int:
+    """
+    voice mcp serve            — run the MCP server over stdio (for opencode)
+    voice mcp status           — is an agent currently in control?
+    voice mcp stop             — kill any running MCP server (release the lock)
+    voice mcp log [-n N]       — tail the audit log
+    """
+    sub = args[0] if args else "status"
+    if sub == "serve":
+        from . import mcp_server
+        mcp_server.serve()
+        return 0
+    if sub == "status":
+        active = agent.is_active()
+        print("agent:", "active" if active else "idle")
+        return 0
+    if sub == "stop":
+        import signal
+        import subprocess as sp
+        # Find any running 'voice_opencode.mcp_server' or 'voice mcp serve' processes.
+        try:
+            r = sp.run(
+                ["pgrep", "-f", "voice_opencode.*mcp"],
+                capture_output=True, text=True,
+            )
+            killed = 0
+            for pid in r.stdout.split():
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                    killed += 1
+                except Exception:
+                    pass
+            agent.release()
+            print(f"stopped {killed} mcp process(es); lock released")
+        except FileNotFoundError:
+            agent.release()
+            print("pgrep not found; released lock only")
+        return 0
+    if sub == "log":
+        n = 50
+        if len(args) >= 3 and args[1] == "-n":
+            try:
+                n = int(args[2])
+            except ValueError:
+                pass
+        if not paths.AGENT_LOG_FILE.exists():
+            print("(no agent log yet)")
+            return 0
+        lines = paths.AGENT_LOG_FILE.read_text().splitlines()[-n:]
+        print("\n".join(lines))
+        return 0
+    _eprint(f"Unknown: mcp {sub}")
+    return 1
 
 
 # ---- desktop subgroup -------------------------------------------------------
@@ -291,6 +348,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "tray":     cmd_tray,
     "status":   cmd_status,
     "desktop":  cmd_desktop,
+    "mcp":      cmd_mcp,
 }
 
 # Legacy flat aliases — preserved for Hyprland binds and muscle memory.

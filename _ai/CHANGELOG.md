@@ -15,7 +15,32 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
   `pip install -e .` so the package is importable without the wrapper's
   `PYTHONPATH=src` trick.
 - Removed `voice_opencode.py.legacy` and `voice_tray.py.legacy`.
-- `git init` + initial commit.
+- `git init` + initial commit (`40a41db`).
+
+---
+
+## 2026-05-15 — Phase 3: MCP server (`voice_desktop`)
+- New module `agent.py`: process-level lock (`AGENT_FILE`) + JSONL audit
+  log (`logs/agent.log`) + `is_blocking()` that combines pause + agent.
+- New module `mcp_server.py`: FastMCP-based server over stdio with 8
+  tools (`type_text`, `press_key`, `move_mouse`, `click_mouse`,
+  `focused_window`, `capture_screen`, `list_monitors`, `sleep_ms`).
+- Safety rails: dangerous-key blocklist, 30 calls / 5 s rate limit,
+  per-call lock via `_acting()` context manager (read-only tools don't
+  take the lock so F9 stays usable).
+- New CLI subgroup `voice mcp serve|status|stop|log`.
+- `pipeline.start_recording` now consults `agent.is_blocking()`.
+- Tray gained an "agente: 🤖 activo" status line, a "Detener agente
+  (MCP)" action, and treats agent-mode as `thinking` for icon purposes.
+- `voice state` JSON gained `agent: bool` (additive, doesn't break the
+  tray's existing wire format).
+- Wired into opencode at `~/.config/opencode/opencode.json` as
+  `voice_desktop` — verified end-to-end: opencode invoked
+  `voice_desktop_list_monitors`, the server returned the monitors JSON,
+  the model formatted the answer.
+- Added `tests/test_agent.py` (4 tests) and `tests/test_mcp_server.py`
+  (5 tests). Total: 33 tests, all green; ruff + mypy clean (18 source files).
+- Recorded in ADR-0011.
 
 ---
 

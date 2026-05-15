@@ -17,6 +17,8 @@ voice-opencode/
 │   ├── screenshot.py         # grim wrapper (monitor/window/all)
 │   ├── opencode_client.py    # health() + Session class
 │   ├── desktop.py            # wtype + ydotool + hyprctl activewindow
+│   ├── agent.py              # MCP agent-mode lock + audit log
+│   ├── mcp_server.py         # MCP server (stdio) for opencode
 │   ├── pipeline.py           # orchestration: rec → stt → opencode → tts
 │   ├── cli.py                # dispatcher: grouped + legacy aliases
 │   └── tray.py               # PyQt6 QSystemTrayIcon
@@ -40,12 +42,13 @@ Lower modules have no awareness of higher ones. Imports flow downward only.
               ├── pipeline.py ─────────────┐
               │     │                      │
               │     ├── audio.py           ├── desktop.py
-              │     ├── stt.py             │
+              │     ├── stt.py             ├── agent.py
               │     ├── tts.py             │
               │     ├── screenshot.py ─────┤
               │     ├── opencode_client.py │
               │     └── state.py           │
               │                            │
+              ├── mcp_server.py ───────────┤   (uses agent + desktop + screenshot)
               ├── config.py ───────────────┤
               ├── notify.py ───────────────┤
               ├── logging.py ──────────────┤
@@ -55,6 +58,8 @@ Lower modules have no awareness of higher ones. Imports flow downward only.
 Rule: a module higher in the tree may import from anything below it; the
 reverse is forbidden. ``screenshot.py`` deliberately calls ``hyprctl``
 itself instead of importing ``desktop.py`` to avoid a cycle.
+``agent.py`` does a *lazy* (function-local) import of ``state`` to expose
+``is_blocking()`` without creating a cycle.
 
 ## Process model
 
@@ -75,8 +80,16 @@ State files written to ``$XDG_RUNTIME_DIR/voice-opencode/``:
 | `rec.wav`     | arecord               | stt.transcribe        |
 | `state`       | pipeline phases       | tray.refresh + cli `state` |
 | `paused`      | cli `pause/resume`    | pipeline.start_recording, tray |
+| `agent`       | mcp_server (per call) | tray, agent.is_active, cli `state` |
 | `session.id`  | opencode_client       | opencode_client       |
 | `screen.png`  | screenshot.capture    | opencode_client.ask   |
+
+Plus, in the repo:
+
+| File              | Writer                              | Reader              |
+|-------------------|-------------------------------------|---------------------|
+| `logs/agent.log`  | mcp_server (every tool call)        | `voice mcp log`     |
+| `logs/voice.log`  | logging.log()                       | tray "Ver logs"     |
 
 ## Configuration resolution
 
@@ -100,5 +113,6 @@ to ``config.json`` to refresh in-memory ``settings``. The CLI's
 - **New screenshot scope**: extend ``screenshot.capture_to`` and pass the
   new value through ``settings.screenshot_scope``.
 - **New tool for the agent (Phase 3)**: add a function to ``desktop.py``,
-  expose it from the CLI (``desktop`` group), then wrap it in the future
-  MCP server.
+  expose it from the CLI (``desktop`` group), then register a ``@mcp.tool``
+  wrapper in ``mcp_server.build_server()``. If it acts on the desktop,
+  wrap the call in ``with _acting():`` so F9 is blocked during execution.

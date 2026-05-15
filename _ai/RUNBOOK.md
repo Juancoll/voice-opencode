@@ -45,6 +45,31 @@ voice config set speaker_id 0
 For multi-speaker models like `es_ES-sharvard-medium` the speaker_id
 matters (0=M, 1=F).
 
+## MCP / agent mode (Phase 3)
+
+opencode launches our MCP server on its own (config in
+`~/.config/opencode/opencode.json`). Tools are exposed as
+`voice_desktop_<name>`. Useful in prompts:
+
+> "Use voice_desktop_capture_screen to see my screen, then describe it."
+>
+> "Open my browser, go to grim.app, take a screenshot. Use voice_desktop tools."
+
+Inspect / manage:
+
+```bash
+voice mcp status              # is an agent acting right now?
+voice mcp log -n 20           # tail the audit log (logs/agent.log)
+voice mcp stop                # kill any running mcp server, release lock
+voice mcp serve               # run the server in the foreground (debugging)
+```
+
+The tray menu has a "Detener agente (MCP)" item that calls `mcp stop`.
+
+While an MCP tool is *acting* (typing, clicking, key presses), F9 is
+silently ignored — that's the lock. Read-only tools (capture, focused,
+list_monitors) don't take the lock.
+
 ## Change opencode working directory
 
 Edit `WorkingDirectory=` in `~/.config/systemd/user/opencode-serve.service`
@@ -85,11 +110,30 @@ ls /run/user/$UID/.ydotool_socket    # should exist
 If `/dev/uinput` is `crw-------`, you're not in `input` group:
 `sudo usermod -aG input $USER` then log out + back in.
 
-### "Whisper model not found"
+### Whisper model not found
 ```bash
 ls -la models/                       # ggml-small.bin must be ~466 MB
 ```
 Re-run `./install.sh` to fetch.
+
+### MCP server not appearing in opencode
+```bash
+cat ~/.config/opencode/opencode.json | jq .mcp
+# voice_desktop should be type=local, command=[…/voice, mcp, serve], enabled=true
+
+# Verify the server can boot at all:
+./voice mcp serve <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}'
+# Should answer with serverInfo.name = voice-opencode-desktop
+
+systemctl --user restart opencode-serve   # to pick up config changes
+journalctl --user -u opencode-serve -f    # look for MCP load errors
+```
+
+### Agent stuck holding the lock
+```bash
+voice mcp status     # if "active" but no tool is actually running:
+voice mcp stop       # kills any voice_opencode mcp processes + releases lock
+```
 
 ---
 
