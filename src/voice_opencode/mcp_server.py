@@ -125,6 +125,7 @@ def build_server() -> Any:
     _register_apps(mcp)
     _register_shell(mcp)
     _register_ocr(mcp)
+    _register_memory(mcp)
     _register_misc(mcp)
 
     return mcp
@@ -910,6 +911,89 @@ def _register_ocr(mcp: Any) -> None:
                 "path": path, "needle": needle, "matches": len(matches),
             })
             return [m.to_dict() for m in matches]
+
+
+def _register_memory(mcp: Any) -> None:
+    """Plain-Markdown agent memory (Phase G).
+
+    Four tools — three read-only readers (search/recent/list_days)
+    plus one assist-tier writer (append). The append tool writes to
+    ``memory/YYYY-MM-DD.md`` in the project root; the agent uses
+    this to persist context across opencode sessions (ADR-0019).
+
+    No capability gate: this is pure filesystem text on our own repo,
+    not a desktop capability. We only gate by capacity tier.
+    """
+    from . import memory as mem  # local import: stdlib-only module
+
+    def _entry_to_dict(e: mem.MemoryEntry) -> dict[str, Any]:
+        return {
+            "ts":   e.ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "tags": list(e.tags),
+            "body": e.body,
+            "file": e.file.name,
+        }
+
+    if capacity.allows("memory_search"):
+        @mcp.tool(description=(
+            "Search the agent's plain-Markdown memory. Case-insensitive "
+            "substring match over body and tags. Returns newest first. "
+            "Empty query returns []. Each result: {ts, tags, body, file}."
+        ))
+        def memory_search(query: str, limit: int = 20) -> list[dict[str, Any]]:
+            results = mem.search(query, limit=limit)
+            agent.audit("memory_search",
+                        {"query": query, "limit": limit, "matches": len(results)})
+            return [_entry_to_dict(e) for e in results]
+
+    if capacity.allows("memory_recent"):
+        @mcp.tool(description=(
+            "Return the most recent N entries across all days, newest first. "
+            "Useful at the start of a session to recover context. Each "
+            "result: {ts, tags, body, file}."
+        ))
+        def memory_recent(n: int = 10) -> list[dict[str, Any]]:
+            results = mem.recent(n)
+            agent.audit("memory_recent", {"n": n, "matches": len(results)})
+            return [_entry_to_dict(e) for e in results]
+
+    if capacity.allows("memory_list_days"):
+        @mcp.tool(description=(
+            "List every day (YYYY-MM-DD) that has at least one memory "
+            "entry, newest first. Useful before calling memory_search "
+            "to see how much history exists."
+        ))
+        def memory_list_days() -> list[str]:
+            days = mem.list_days()
+            agent.audit("memory_list_days", {"days": len(days)})
+            return days
+
+    if capacity.allows("memory_append"):
+        @mcp.tool(description=(
+            "Append a new entry to today's memory file. Body is free-form "
+            "Markdown; tags are optional short strings (no commas or ']'). "
+            "Returns {ts, tags, body, file}. Use this to persist anything "
+            "you want to remember in future sessions: decisions, fixes, "
+            "context about the user's environment."
+        ))
+        def memory_append(
+            text: str,
+            tags: list[str] | None = None,
+        ) -> dict[str, Any]:
+            tag_tuple = tuple(tags) if tags else ()
+            try:
+                entry = mem.append(text, tags=tag_tuple)
+            except ValueError as e:
+                agent.audit("memory_append",
+                            {"chars": len(text), "denied": True}, str(e))
+                return {"error": str(e)}
+            agent.audit("memory_append", {
+                "ts":   entry.ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "tags": list(entry.tags),
+                "chars": len(entry.body),
+                "file":  entry.file.name,
+            })
+            return _entry_to_dict(entry)
 
 
 def _register_misc(mcp: Any) -> None:

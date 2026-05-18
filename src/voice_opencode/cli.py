@@ -694,7 +694,7 @@ def cmd_shell(args: list[str]) -> int:
         return 1
 
 
-# ---- platform subgroup (diagnostics) ----------------------------------------
+# ---- ocr subgroup ------------------------------------------------------------
 def cmd_ocr(args: list[str]) -> int:
     """
     voice ocr find <text> [--region X Y W H]   — search needle on screen
@@ -777,6 +777,100 @@ def cmd_ocr(args: list[str]) -> int:
         return 1
 
 
+# ---- memory subgroup ---------------------------------------------------------
+def cmd_memory(args: list[str]) -> int:
+    """
+    voice memory append <text...> [--tag T ...]  — append a new entry to today
+    voice memory search <query...> [--limit N]   — substring search, newest first
+    voice memory recent [N]                      — last N entries (default 10)
+    voice memory days                            — list days that have entries
+    """
+    if not args:
+        _eprint(cmd_memory.__doc__)
+        return 1
+    from . import memory as mem
+    sub, rest = args[0], args[1:]
+
+    if sub == "append":
+        tags: list[str] = []
+        while "--tag" in rest:
+            i = rest.index("--tag")
+            if i + 1 >= len(rest):
+                _eprint("--tag needs a value")
+                return 1
+            tags.append(rest[i + 1])
+            rest = rest[:i] + rest[i + 2:]
+        if not rest:
+            _eprint("Usage: voice memory append <text...> [--tag T ...]")
+            return 1
+        text = " ".join(rest)
+        try:
+            entry = mem.append(text, tags=tuple(tags))
+        except ValueError as e:
+            _eprint(f"error: {e}")
+            return 1
+        print(f"{entry.file.name}  {entry.ts:%H:%M:%S}  {len(entry.body)} chars")
+        return 0
+
+    if sub == "search":
+        limit = 20
+        if "--limit" in rest:
+            i = rest.index("--limit")
+            try:
+                limit = int(rest[i + 1])
+            except (ValueError, IndexError):
+                _eprint("--limit needs an integer")
+                return 1
+            rest = rest[:i] + rest[i + 2:]
+        if not rest:
+            _eprint("Usage: voice memory search <query...> [--limit N]")
+            return 1
+        query = " ".join(rest)
+        results = mem.search(query, limit=limit)
+        print(json.dumps(
+            [
+                {
+                    "ts":   e.ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "tags": list(e.tags),
+                    "body": e.body,
+                    "file": e.file.name,
+                }
+                for e in results
+            ],
+            indent=2, ensure_ascii=False,
+        ))
+        return 0
+
+    if sub == "recent":
+        try:
+            n = int(rest[0]) if rest else 10
+        except ValueError:
+            _eprint("Usage: voice memory recent [N]")
+            return 1
+        results = mem.recent(n)
+        print(json.dumps(
+            [
+                {
+                    "ts":   e.ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "tags": list(e.tags),
+                    "body": e.body,
+                    "file": e.file.name,
+                }
+                for e in results
+            ],
+            indent=2, ensure_ascii=False,
+        ))
+        return 0
+
+    if sub == "days":
+        for d in mem.list_days():
+            print(d)
+        return 0
+
+    _eprint(cmd_memory.__doc__)
+    return 1
+
+
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
@@ -827,6 +921,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "apps":       cmd_apps,
     "shell":      cmd_shell,
     "ocr":        cmd_ocr,
+    "memory":     cmd_memory,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

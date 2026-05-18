@@ -275,6 +275,38 @@ interactive use. The backend hard-caps each invocation at
 60 s and runs Tesseract with `OMP_THREAD_LIMIT=1` to avoid
 a CPU storm when the agent fires several OCR calls back-to-back.
 
+## Agent memory (Phase G)
+
+Persistent notes the agent writes between sessions. Plain
+Markdown, one file per day under `<repo>/memory/YYYY-MM-DD.md`.
+Each entry is an `## ISO-ts  [tags]` header followed by free-form
+body. You can `cat`, edit, or delete the files by hand — there
+is no database (ADR-0019).
+
+```bash
+voice memory append "fixed the audio bug" --tag audio --tag bug
+voice memory search audio                     # newest first
+voice memory recent 10                        # last 10 entries
+voice memory days                             # list days that have notes
+```
+
+Four MCP tools:
+
+- `memory_search(query, limit=20)` — read-only
+- `memory_recent(n=10)` — read-only
+- `memory_list_days()` — read-only
+- `memory_append(text, tags?)` — assist tier (writes to disk)
+
+Rules the writer enforces (to keep the parser trivial):
+
+- text cannot be empty after `strip()`
+- no tag may contain `,` or `]`
+- no body line may start with `## ` (would split the entry on
+  next read — indent it or use `###` instead)
+
+The `memory/` directory is gitignored; each user's memory is
+local.
+
 ## Audit & capacity from the tray (Phase J)
 
 The tray's **Agente** submenu has two entries:

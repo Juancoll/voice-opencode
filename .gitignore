@@ -19,6 +19,7 @@ voices/*.onnx.json
 # Runtime
 logs/
 config.json
+memory/
 
 # Editor
 .vscode/

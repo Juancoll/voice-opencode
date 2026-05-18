@@ -23,6 +23,7 @@ voice-opencode/
 │   ├── cli.py                     # dispatcher: grouped + legacy aliases
 │   ├── tray.py                    # PyQt6 QSystemTrayIcon
 │   ├── audit_viewer.py            # Qt dialog tailing agent.log (Phase J)
+│   ├── memory.py                  # plain-Markdown agent memory (Phase G)
 │   │
 │   ├── platform/                  # ← OS/DE-agnostic abstraction layer
 │   │   ├── __init__.py            # detect(), singletons (wm/input/screen/…)

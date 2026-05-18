@@ -3,6 +3,69 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Phase G: agent memory (plain Markdown)
+
+- New ``memory.py`` module — stdlib-only, no ``platform/``
+  imports. Public API: ``append(text, tags=(), when=None)``,
+  ``search(query, limit=20)``, ``recent(n=10)``,
+  ``list_days()``, plus ``MemoryEntry`` frozen dataclass
+  (``ts, tags, body, file``). Storage: ``<repo>/memory/YYYY-MM-DD.md``,
+  one file per day, H2 header per entry
+  (``## YYYY-MM-DD HH:MM:SS  [tag, tag]``), free-form Markdown
+  body until next header. Strict ``YYYY-MM-DD.md`` stem
+  validation (also checks calendar validity via
+  ``datetime.strptime``) so stray notes are ignored.
+- ``append`` rejects empty text, tags with ``,`` or ``]``, and
+  body lines starting with ``## `` (would split the entry on
+  re-parse — fail loud rather than escape on parse).
+- ``search`` is case-insensitive substring over body + tags,
+  newest-first within and across files. Empty/whitespace
+  query returns ``[]`` (no "give me everything" footgun).
+- ``recent`` walks files newest-first; ``list_days()`` returns
+  ISO strings of every ``.md`` whose stem is a real calendar
+  date.
+- ``paths.py``: new ``MEMORY_DIR = PROJECT_ROOT / "memory"``.
+- ``cli.py``: new ``voice memory {append|search|recent|days}``
+  group. ``append`` accepts ``--tag T`` (repeatable);
+  ``search`` accepts ``--limit N``; ``recent`` takes an
+  optional N (default 10). JSON output for search/recent.
+- ``mcp_server.py``: new ``_register_memory(mcp)`` exposing
+  four tools — ``memory_search``, ``memory_recent``,
+  ``memory_list_days`` (all read-only) and ``memory_append``
+  (assist). No capability gate (it's just text on our own
+  disk); only the capacity tier filters. Audit records
+  ``{query, matches}`` / ``{ts, tags, chars, file}`` —
+  never the body contents.
+- ``capacity.py``: tier mapping added for all four tools.
+  Live counts: read-only 20 (eran 17), assist 45 (eran 41),
+  full 48 (eran 44).
+- ``.gitignore``: ``memory/`` added — each user's memory is
+  local, not committed.
+- New **ADR-0019** documenting the storage choice (plain
+  Markdown, one file per day), the rejection of JSON Lines /
+  FTS5 / ripgrep / single big file / one-file-per-topic, and
+  the validation rules (no ``## `` in body, no ``,`` or ``]``
+  in tags, empty query returns ``[]``).
+- 283 tests verde (eran 252): +31 in ``tests/test_memory.py``
+  covering append (file creation, tag rendering, atomic
+  append, strip, empty/invalid-tag/header-like-body
+  rejection, default-now microsecond stripping), parse
+  round-trip (single/multi entry, multi-line body, missing
+  file, stray pre-header lines, malformed timestamp drop,
+  empty body), search (body/tag match, case insensitivity,
+  newest-first, empty query, no matches, limit, missing
+  dir), recent (newest-first cross-file, oversize n,
+  zero/negative, no files), list_days (newest-first, ignores
+  non-ISO files, no files).
+- Smoke live OK: ``voice memory append "Phase G smoke test from CLI" --tag phase-g --tag test``
+  wrote ``memory/2026-05-18.md``; ``voice memory days``
+  returned ``2026-05-18``; ``voice memory recent 3`` and
+  ``voice memory search phase-g`` both returned the entry;
+  MCP ``memory_search`` over the in-process server returned
+  the same shape.
+- No new runtime dep (stdlib only).
+- ruff + mypy verde (60 source files, +1: ``memory.py``).
+
 ## 2026-05-18 — Phase F: OCR find_text (Tesseract)
 
 - New ``backends/linux_ocr_tesseract/tesseract_backend.py`` —

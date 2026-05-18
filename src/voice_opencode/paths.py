@@ -26,6 +26,7 @@ LOGS_DIR: Path = PROJECT_ROOT / "logs"
 MODELS_DIR: Path = PROJECT_ROOT / "models"
 VOICES_DIR: Path = PROJECT_ROOT / "voices"
 ICONS_DIR: Path = PROJECT_ROOT / "icons"
+MEMORY_DIR: Path = PROJECT_ROOT / "memory"
 CONFIG_FILE: Path = PROJECT_ROOT / "config.json"
 
 # Runtime state (ephemeral, per user/session)

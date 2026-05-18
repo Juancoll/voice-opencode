@@ -59,6 +59,9 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "apps_list_running":   "read-only",
     "screen_find_text":    "read-only",
     "ocr_find_text_in_file": "read-only",
+    "memory_search":       "read-only",
+    "memory_recent":       "read-only",
+    "memory_list_days":    "read-only",
     # --- assist (reversible / interactive) ---
     "type_text":                 "assist",
     "press_key":                 "assist",
@@ -84,6 +87,7 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "media_next":                "assist",
     "media_prev":                "assist",
     "apps_launch":               "assist",
+    "memory_append":             "assist",
     # --- full (irreversible) ---
     "close_window":              "full",
     "apps_kill":                 "full",

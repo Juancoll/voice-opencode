@@ -5,6 +5,101 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0019 — Agent memory: plain Markdown, one file per day, stdlib search
+
+Date: 2026-05-18
+
+### Context
+
+Phase G gives the agent a way to remember things across opencode
+sessions. Today every session starts blank — opencode forgets
+that yesterday we fixed an audio bug, that Tesseract needs
+``--region`` to be fast, that the user prefers Spanish-first
+language order. Three axes had to be decided:
+
+1. **Storage format.** Plain Markdown vs. JSON Lines vs. SQLite
+   FTS5 vs. a vector store.
+2. **Layout on disk.** One big file vs. one file per day vs. one
+   file per topic.
+3. **Search strategy.** stdlib substring vs. ripgrep subprocess
+   vs. a real index.
+
+### Decision
+
+**Plain Markdown, one file per day, stdlib search.** Memory
+lives at ``<repo>/memory/YYYY-MM-DD.md``. Each entry is an H2
+header with timestamp and optional inline tag list:
+
+```markdown
+## 2026-05-18 14:32:11  [phase-g, memory]
+Free-form Markdown body until the next ``## `` header.
+```
+
+Four MCP tools — three read-only, one assist:
+
+- ``memory_search(query, limit=20)`` — case-insensitive
+  substring scan over body + tags, newest first.
+- ``memory_recent(n=10)`` — last N entries across all days.
+- ``memory_list_days()`` — every ``YYYY-MM-DD`` that has
+  entries, newest first.
+- ``memory_append(text, tags?)`` — append a single entry to
+  today's file.
+
+The module is **stdlib-only** and never imports from
+``platform/`` — memory is text on the project's own disk,
+not a desktop capability. There is no capability constant; we
+gate purely by capacity tier.
+
+### Alternatives rejected
+
+- **JSON Lines.** Faster to parse, easier to add fields later,
+  but loses the "cat the file and read it" affordance that
+  motivated the choice in the first place. The user explicitly
+  asked for Markdown plano.
+- **YAML frontmatter blocks per entry.** Cleaner machine
+  parsing but uglier when reading raw. The H2-header form is
+  good enough for both humans and a one-page regex.
+- **SQLite FTS5 index.** Real ranking, fast at scale. Overkill
+  until the corpus is thousands of entries; today it would
+  bring a maintenance burden (schema, migrations, index
+  rebuilds, .index.sqlite bloating git) for no perceptible
+  speedup. Re-evaluate if memory grows past ~10 MB total.
+- **ripgrep subprocess for search.** Faster and supports regex.
+  But it adds a runtime dep, a subprocess hop per query, and a
+  different result shape (we'd have to parse line offsets to
+  reassemble entries). At our scale (one user, sub-MB corpus),
+  Python's ``in`` is fine. Easy to swap later — the public API
+  ``mem.search(query, limit)`` would stay identical.
+- **One big ``MEMORY.md``.** Simpler to grep with eyes, but
+  any append rewrites and grows the parse cost monotonically.
+  Per-day files cap each parse at one day's worth of entries
+  and naturally rotate.
+- **One file per topic / tag.** Requires deciding topics up
+  front, encourages duplicate notes ("does this go in
+  ``audio.md`` or ``bugs.md``?"), and breaks chronological
+  reading. Tags solve the cross-cutting case without forcing a
+  filesystem decision.
+
+### Consequences
+
+- The ``memory/`` directory is gitignored. Each user's memory
+  is local; we don't want to commit it accidentally nor force
+  a sync mechanism on day one.
+- Body text **cannot** contain a line starting with ``## ``.
+  ``append`` validates this and raises ``ValueError`` rather
+  than escape on parse, keeping the parser trivial. Workaround:
+  indent the offending line, or use ``###`` / a different
+  prefix.
+- Tags **cannot** contain ``,`` or ``]``. Same reason —
+  header is one-line greppable.
+- ``memory_search`` returns ``[]`` for empty/whitespace query
+  (no "give me everything" footgun in a tool exposed to the
+  LLM).
+- Tool counts: read-only **20** (+3), assist **45** (+4),
+  full **48** (+4). 283 tests verde (+31).
+
+---
+
 ## ADR-0018 — OCR backend: pure `find_text(path, …)` + composed MCP helper
 
 Date: 2026-05-18

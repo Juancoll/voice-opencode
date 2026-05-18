@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase F.
+Last updated: 2026-05-18 — end of Phase G.
 
 ---
 
@@ -62,10 +62,52 @@ published on GitHub.
 | J     | Audit viewer + capacity kill-switch en tray | ✅ done    |
 | E     | run_shell with safety rails        | ✅ done       |
 | F     | OCR find_text (Tesseract)          | ✅ done       |
-| G     | Memory (Markdown plano)            | ⏭ next       |
-| K     | OS-agnostic detect_*: replace UA strings with ``platform_info`` | pending |
+| G     | Memory (Markdown plano)            | ✅ done       |
+| K     | OS-agnostic detect_*: replace UA strings with ``platform_info`` | ⏭ next (optional) |
 
-## What just shipped (Phase F, this commit)
+## What just shipped (Phase G, this commit)
+
+- New ``memory.py`` — stdlib-only, no ``platform/`` imports.
+  Public API: ``append(text, tags=(), when=None)``,
+  ``search(query, limit=20)``, ``recent(n=10)``,
+  ``list_days()``, plus ``MemoryEntry`` frozen dataclass.
+  Storage: ``<repo>/memory/YYYY-MM-DD.md``, one file per
+  day, H2 header per entry. Strict ``YYYY-MM-DD.md`` stem
+  validation (also calendar-validates via
+  ``datetime.strptime``).
+- ``append`` rejects: empty text, tags with ``,`` or ``]``,
+  body lines starting with ``## `` (would split entry on
+  re-parse — fail loud, no escape on parse).
+- ``search`` is case-insensitive substring over body + tags,
+  newest-first. Empty query → ``[]``.
+- ``paths.py``: new ``MEMORY_DIR``.
+- ``cli.py``: new ``voice memory {append|search|recent|days}``
+  group. ``append`` takes repeatable ``--tag T``; ``search``
+  takes ``--limit N``.
+- ``mcp_server.py``: ``_register_memory(mcp)`` exposes four
+  tools — three read-only (search/recent/list_days) and one
+  assist (append). No capability gate (text on our own disk);
+  only capacity tier filters. Audit records ``{query,
+  matches}`` / ``{ts, tags, chars, file}`` — never the body
+  contents.
+- ``capacity.py``: tier mapping added. Live counts: read-only
+  20 (eran 17), assist 45 (eran 41), full 48 (eran 44).
+- ``.gitignore``: ``memory/`` added.
+- New **ADR-0019** — plain Markdown, one file per day,
+  stdlib search. Alternatives rejected: JSON Lines, YAML
+  frontmatter, SQLite FTS5, ripgrep subprocess, one big
+  ``MEMORY.md``, one file per topic.
+- 283 tests verde (eran 252): +31 in
+  ``tests/test_memory.py`` (append validation, parse
+  round-trip, search filtering/ordering, recent
+  cross-file, list_days date validation).
+- Smoke live OK end-to-end: CLI append → days/recent/search
+  return the entry; MCP ``memory_search`` over in-process
+  server returns identical shape.
+- No new runtime dep (stdlib only).
+- ruff + mypy verde (60 source files, +1: ``memory.py``).
+
+## Previously shipped (Phase F)
 
 - ``backends/linux_ocr_tesseract/tesseract_backend.py``:
   ``TesseractOCRBackend``, pure (image-path → matches).
@@ -297,14 +339,17 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase G — Memory (Markdown plano).** Persistir
-   conversaciones del agente en `memory/YYYY-MM-DD.md`,
-   tool MCP `memory_search` / `memory_append`. Sin DB; solo
-   ripgrep o fts5 si crece. Tier read-only para search,
-   assist para append.
-2. **Phase K (futuro, opcional)** — OS-agnostic detection helpers:
+1. **Phase K (optional)** — OS-agnostic detection helpers:
    reemplazar UA-strings y heurísticas dispersas por
-   ``platform_info`` consultable y testeable.
+   ``platform_info`` consultable y testeable. No es bloqueante;
+   el sistema funciona sin esto.
+2. Posibles mejoras orgánicas no planificadas:
+   - Memory: agregar ``memory_delete(ts)`` o ``memory_edit(ts, text)``
+     si el agente alguna vez pide corregir notas (hoy no se puede
+     deshacer una entrada salvo editando el ``.md`` a mano).
+   - Memory: si el corpus crece >10 MB, evaluar índice FTS5 o
+     ripgrep (ADR-0019 lo prevé).
+   - Memory: tray entry "Ver memoria…" similar al audit viewer.
 
 ## Critical context to keep in your head
 
@@ -373,6 +418,15 @@ published on GitHub.
   same-line words and union their bboxes. Languages
   configurable via ``settings.ocr_languages`` (default
   ``("spa", "eng")``). Both tools live in ``read-only`` tier.
+- ADR-0019: Agent memory is plain Markdown, one file per day
+  (``memory/YYYY-MM-DD.md``). H2 header per entry
+  (``## ts  [tags]``) + free-form body. Stdlib substring
+  search (no DB / ripgrep). Four MCP tools: search/recent/
+  list_days (read-only), append (assist). No capability gate
+  — memory is text on our own disk, not a desktop capability.
+  Body rejects lines starting with ``## `` and tags reject
+  ``,`` / ``]`` at append time (loud fail > escape on parse).
+  ``memory/`` is gitignored.
 
 ## Environment variables (optional)
 
@@ -388,14 +442,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 252 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 283 passing
 venv/bin/ruff check src tests                # all clean
-venv/bin/mypy src/voice_opencode             # no issues, 59 files
+venv/bin/mypy src/voice_opencode             # no issues, 60 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase G.
+If any of those fail, fix them **before** starting Phase K.
 
 ## Files to read first when resuming
 
