@@ -114,6 +114,7 @@ def build_server() -> Any:
     _register_screen(mcp)
     _register_windows(mcp)
     _register_clipboard(mcp)
+    _register_dialogs(mcp)
     _register_misc(mcp)
 
     return mcp
@@ -489,6 +490,78 @@ def _register_clipboard(mcp: Any) -> None:
                     return _err(exc)
             agent.audit("clipboard_write", {"len": len(text)})
             return f"wrote {len(text)} chars to clipboard"
+
+
+def _register_dialogs(mcp: Any) -> None:
+    """Notifications + blocking dialogs (notify-send + kdialog/zenity)."""
+
+    if plat.supported(cap.NOTIFY_SHOW):
+        @mcp.tool(description=(
+            "Show a desktop notification (non-blocking). "
+            "Use for status updates the user can ignore."
+        ))
+        def notify(title: str, body: str = "", urgency: str = "normal") -> str:
+            if (e := _guard("notify", {"len_title": len(title)})):
+                return e
+            try:
+                plat.notify.show(title, body, urgency=urgency)
+            except (BackendError, NotSupportedError) as exc:
+                return _err(exc)
+            agent.audit("notify", {"title": title[:80], "urgency": urgency})
+            return "notified"
+
+    if plat.supported(cap.DIALOG_CONFIRM):
+        @mcp.tool(description=(
+            "Ask the user a Yes/No question via a modal dialog. "
+            "BLOCKS until the user answers. Use sparingly — every call "
+            "interrupts the user. Returns 'yes' or 'no'."
+        ))
+        def ask_confirm(message: str, title: str = "Confirm") -> str:
+            if (e := _guard("ask_confirm", {"len_msg": len(message)})):
+                return e
+            with _acting():
+                try:
+                    ok = plat.dialog.confirm(message, title=title)
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("ask_confirm", {"answer": "yes" if ok else "no"})
+            return "yes" if ok else "no"
+
+    if plat.supported(cap.DIALOG_ASK_TEXT):
+        @mcp.tool(description=(
+            "Ask the user for a line of text via a modal input dialog. "
+            "BLOCKS until the user submits or cancels. "
+            "Returns the text, or empty string if cancelled."
+        ))
+        def ask_user(prompt: str, default: str = "", title: str = "Input") -> str:
+            if (e := _guard("ask_user", {"len_prompt": len(prompt)})):
+                return e
+            with _acting():
+                try:
+                    ans = plat.dialog.ask_text(prompt, default=default, title=title)
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("ask_user", {"cancelled": ans is None, "len": len(ans or "")})
+            return ans if ans is not None else ""
+
+    if plat.supported(cap.DIALOG_ASK_CHOICE):
+        @mcp.tool(description=(
+            "Ask the user to pick one option from a list via a modal menu. "
+            "BLOCKS until the user picks or cancels. "
+            "Returns the chosen option, or empty string if cancelled."
+        ))
+        def ask_choice(prompt: str, choices: list[str], title: str = "Choose") -> str:
+            if (e := _guard("ask_choice", {"n": len(choices)})):
+                return e
+            if not choices:
+                return "error: choices must be non-empty"
+            with _acting():
+                try:
+                    ans = plat.dialog.ask_choice(prompt, choices, title=title)
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("ask_choice", {"cancelled": ans is None, "choice": ans})
+            return ans if ans is not None else ""
 
 
 def _register_misc(mcp: Any) -> None:

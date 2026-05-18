@@ -5,7 +5,88 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
-## ADR-0012 — Platform abstraction layer (``platform/`` + ``backends/``)
+## ADR-0013 — Dialog backends: shared exit-code contract, kdialog preferred over zenity
+**Date:** 2026-05-18
+
+**Context.** Phase C had to land three blocking-dialog operations
+(``confirm``, ``ask_text``, ``ask_choice``) plus a non-blocking
+``notify``. We had two real candidates on Linux: ``kdialog`` (KDE/Qt)
+and ``zenity`` (GNOME/GTK). Both ship the dialogs we want, both speak
+exit codes, but they disagree on flags, on stdout format, and on how
+they signal cancel. The MCP tools must also expose these primitives to
+opencode in a way the model can reason about — Python ``None`` doesn't
+survive a JSON-RPC boundary cleanly.
+
+We also needed to stay consistent with the rest of the codebase:
+``BackendError`` for "the backend itself broke" vs. an in-band value
+for "the user said no / cancelled". Mixing those two is the path to
+exception-driven control flow.
+
+**Decision.**
+
+1. **One shared exit-code contract for every ``DialogBackend``** (see
+   ARCHITECTURE.md → Dialog backends). All current and future backends
+   (rofi/wofi/yad/AppleScript/PowerShell-WPF/…) MUST map:
+   * rc 0 → user confirmed → returns the answer (or ``True``).
+   * rc 1 → user cancelled → returns ``None`` (or ``False`` for confirm).
+   * rc other → ``BackendError`` with the subprocess stderr included.
+2. **kdialog is the default; zenity is the fallback.** Detection order
+   in ``platform/__init__.py`` is: try kdialog first; if its
+   ``__init__`` raises ``BackendError("kdialog not installed")``, try
+   zenity. We deliberately pick kdialog first because the host
+   environment is KDE/Plasma-flavoured (DankMaterialShell) and kdialog
+   themes match. The order is a single, locally-changeable line, not a
+   protocol guarantee.
+3. **Notifications are a separate Protocol.** ``NotifyBackend`` (with
+   the single capability ``NOTIFY_SHOW``) is implemented by
+   ``LibnotifyBackend`` and is desktop-agnostic. It is not part of
+   ``DialogBackend`` because notifications are fire-and-forget and have
+   no cancel/timeout semantics worth modelling.
+4. **MCP tools translate the Pythonic return to strings.** The model
+   sees ``"yes"`` / ``"no"`` for confirm and the answer or ``""`` for
+   the others. We pass the user's text through unchanged (no
+   sanitisation in the backend — that's the caller's job).
+5. **Acting tools hold the agent lock.** ``ask_confirm`` / ``ask_user``
+   / ``ask_choice`` wrap the call in ``with _acting():`` so F9
+   push-to-talk is blocked while the user is staring at the dialog.
+   ``notify`` does NOT take the lock; it's non-blocking.
+6. **Dialog timeouts default to 300s.** They're interactive by nature;
+   the rate limit and the lock are the real safety, not the timeout.
+
+**Alternatives considered.**
+
+* *Detect the DE and pick accordingly* (XDG_CURRENT_DESKTOP). Cute, but
+  it adds a special case for every DE; the "try kdialog, fall back to
+  zenity" rule covers 99% of installs and the user can override with
+  ``VOICE_PLATFORM``.
+* *Single in-process Qt dialog* (``QInputDialog`` from PyQt6). Pulls a
+  Qt event loop into the CLI process; complicates the tray's lifecycle;
+  doesn't work for the MCP server (separate process). Rejected.
+* *Raise an exception on cancel* (``DialogCancelled``). Forces every
+  caller into try/except for the *normal* path. Rejected — cancel is a
+  value, not an error.
+* *Different return shapes per backend*. Would put translation logic
+  in every caller. Rejected — the Protocol is the contract.
+* *Notify as a sub-method of DialogBackend*. Pollutes the capability
+  set (every DialogBackend would have to claim ``NOTIFY_SHOW``).
+  Rejected — orthogonal concerns get orthogonal Protocols.
+
+**Consequences.**
+
+* Adding a new dialog backend (rofi, wofi, yad, AppleScript) is a
+  copy-paste of ``kdialog_backend.py`` with new argv and the same
+  exit-code mapping. See ``_ai/SKILLS/build-dialog-backend.md``.
+* The CLI grew ``voice dialog {notify|confirm|ask|choose}``. ``confirm``
+  uses rc=0 for Yes and **rc=2 for No** (not 1, which is reserved for
+  "backend error") so shells can distinguish.
+* The MCP tool surface grew by 4 tools — ``notify``, ``ask_confirm``,
+  ``ask_user``, ``ask_choice`` — all capability-guarded so they
+  disappear cleanly on platforms without either backend.
+* tests/test_backend_dialog.py mocks ``subprocess.run`` so the test
+  suite never pops a real window. The smoke test ``./voice dialog
+  notify ...`` is the live check.
+
+
 **Date:** 2026-05-15
 
 **Context.** Phase A (Hyprland window control) was about to land as a

@@ -489,6 +489,67 @@ def cmd_clipboard(args: list[str]) -> int:
     return 0
 
 
+# ---- dialog subgroup --------------------------------------------------------
+def cmd_dialog(args: list[str]) -> int:
+    """
+    voice dialog notify <title> [body] [urgency]   — non-blocking notification
+    voice dialog confirm <message> [title]         — Yes/No, rc=0 if Yes
+    voice dialog ask <prompt> [default] [title]    — text input, prints answer
+    voice dialog choose <prompt> <opt1> <opt2> ... — menu, prints choice
+
+    For confirm: rc=0 (Yes), rc=2 (No), rc=1 (backend error).
+    For ask / choose: prints answer to stdout, empty stdout on cancel.
+    Urgency for notify: low|normal|critical (default normal).
+    """
+    if not args:
+        _eprint(cmd_dialog.__doc__)
+        return 1
+    sub, rest = args[0], args[1:]
+    try:
+        if sub == "notify":
+            if not rest:
+                _eprint("Usage: voice dialog notify <title> [body] [urgency]")
+                return 1
+            title = rest[0]
+            body = rest[1] if len(rest) >= 2 else ""
+            urgency = rest[2] if len(rest) >= 3 else "normal"
+            plat.notify.show(title, body, urgency=urgency)
+        elif sub == "confirm":
+            if not rest:
+                _eprint("Usage: voice dialog confirm <message> [title]")
+                return 1
+            msg = rest[0]
+            title = rest[1] if len(rest) >= 2 else "Confirm"
+            ok = plat.dialog.confirm(msg, title=title)
+            return 0 if ok else 2
+        elif sub == "ask":
+            if not rest:
+                _eprint("Usage: voice dialog ask <prompt> [default] [title]")
+                return 1
+            prompt = rest[0]
+            default = rest[1] if len(rest) >= 2 else ""
+            title = rest[2] if len(rest) >= 3 else "Input"
+            ans = plat.dialog.ask_text(prompt, default=default, title=title)
+            if ans is not None:
+                print(ans)
+        elif sub == "choose":
+            if len(rest) < 2:
+                _eprint("Usage: voice dialog choose <prompt> <opt1> <opt2> ...")
+                return 1
+            prompt = rest[0]
+            choices = rest[1:]
+            ans = plat.dialog.ask_choice(prompt, choices, title="Choose")
+            if ans is not None:
+                print(ans)
+        else:
+            _eprint(cmd_dialog.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
@@ -533,6 +594,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "windows":    cmd_windows,
     "workspaces": cmd_workspaces,
     "clipboard":  cmd_clipboard,
+    "dialog":     cmd_dialog,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

@@ -36,11 +36,11 @@ voice-opencode/
 │       ├── linux_kde_wayland/     # KWin scripting (stub for now)
 │       ├── linux_x11/             # xdotool/wmctrl (stub for now)
 │       ├── linux_input/           # ydotool + wtype (display-server agnostic)
-│       ├── linux_clipboard_wayland/  # wl-copy / wl-paste
-│       ├── linux_clipboard_x11/   # xclip (stub)
+│       ├── linux_clipboard_wayland/  # wl-copy / wl-paste (real, Phase B)
+│       ├── linux_clipboard_x11/   # xclip (real, Phase B)
 │       ├── linux_audio_pipewire/  # wpctl + playerctl (stubs, Phase H)
-│       ├── linux_dialog_kde/      # kdialog (stub) + libnotify (real)
-│       ├── linux_dialog_gtk/      # zenity (stub fallback)
+│       ├── linux_dialog_kde/      # kdialog (real, Phase C) + libnotify (real)
+│       ├── linux_dialog_gtk/      # zenity (real, Phase C — fallback)
 │       ├── macos_stub/            # placeholder for AppleScript/Quartz
 │       └── windows_stub/          # placeholder for pywin32/UIA
 ├── tests/                         # pytest suite (no audio/network)
@@ -212,4 +212,32 @@ Settings of note:
   ``@mcp.tool`` wrapper in ``mcp_server._register_*`` guarded by
   ``plat.supported(...)``. If it acts on the desktop, wrap in ``with
   _acting():`` so F9 is blocked during execution.
+
+## Dialog backends — exit-code contract (Phase C)
+
+All ``DialogBackend`` implementations (currently ``kdialog`` and
+``zenity``) share the same exit-code → return-value mapping. New
+backends (rofi/wofi/yad/…) MUST follow it. See ADR-0013 for rationale.
+
+| Subprocess rc | ``confirm`` returns | ``ask_text`` / ``ask_choice`` return |
+|---------------|---------------------|--------------------------------------|
+| 0             | ``True``            | the answer (trailing ``\n`` stripped) |
+| 1             | ``False``           | ``None`` (user cancelled)            |
+| anything else | raise ``BackendError`` (with stderr context) |                                      |
+
+Notes:
+
+* Timeouts are very generous (300s) because dialogs are inherently
+  interactive. A caller wanting tighter bounds wraps the call itself.
+* ``ask_choice`` with an empty ``choices`` list MUST raise
+  ``BackendError("ask_choice needs at least one option")`` — fail fast
+  rather than open an empty menu.
+* ``LibnotifyBackend`` (notify) is separate from ``DialogBackend``: it
+  is fire-and-forget and declares only ``NOTIFY_SHOW``.
+
+The MCP tools wrap ``confirm`` / ``ask_text`` / ``ask_choice`` inside
+``with _acting():`` (so F9 is blocked while the user is in the dialog)
+and translate the Pythonic return values to strings the model can read:
+``"yes"`` / ``"no"`` for confirm, the answer or ``""`` for cancel for
+the others.
 - **New platform**: see "Adding a backend" above.

@@ -62,6 +62,67 @@ The tray's ``Ventanas`` and ``Workspaces`` submenus are rebuilt from
 these calls every time they open, so they always show fresh state
 without polling the WM each second.
 
+## Drive the clipboard from the CLI (Phase B)
+
+Mirrors what the MCP tools see. Backend auto-detected (wl-clipboard on
+Wayland, xclip on X11).
+
+```bash
+voice clipboard read                       # print CLIPBOARD selection to stdout
+voice clipboard read-primary               # print PRIMARY selection
+voice clipboard write "hola mundo"         # inline args (joined with spaces)
+echo "from pipe" | voice clipboard write   # or read stdin when no args
+voice clipboard write-primary "p"
+```
+
+Reads go to stdout WITHOUT a trailing newline (the caller decides).
+Empty selection prints nothing and exits 0 (consistent with the
+backend-level "empty is empty, not an error" rule).
+
+Gotcha: ``wl-copy`` double-forks to keep serving paste requests. The
+backend routes its stdout/stderr to ``/dev/null`` so the parent doesn't
+hang waiting for the daemon child's fds to close. Don't reintroduce
+``capture_output=True`` there — it WILL hang for 3 s on every write.
+
+## Show notifications & ask the user (Phase C)
+
+Non-blocking notification via ``notify-send`` (works on any DE with a
+notification daemon):
+
+```bash
+voice dialog notify "Title" "Body text"           # urgency=normal
+voice dialog notify "Title" "" critical           # red banner
+```
+
+Blocking dialogs via ``kdialog`` (preferred) or ``zenity`` (fallback).
+Exit codes are scripted-friendly: ``confirm`` returns rc=0 for Yes, rc=2
+for No, rc=1 only on backend error. ``ask`` / ``choose`` print the
+answer to stdout, or nothing on cancel.
+
+```bash
+voice dialog confirm "¿Borrar el archivo?" "Confirmar"
+# echo $?   → 0 (Yes), 2 (No), 1 (error)
+
+name=$(voice dialog ask "¿Tu nombre?" "Juan" "Hola")
+color=$(voice dialog choose "Color:" red green blue)
+```
+
+The agent sees these as four MCP tools — ``notify``, ``ask_confirm``,
+``ask_user``, ``ask_choice`` — all capability-guarded so they don't
+appear if neither kdialog nor zenity is installed. The three blocking
+ones hold the agent lock, so F9 push-to-talk is silently ignored while
+the user is in the dialog.
+
+Switch backends manually if you want to test the zenity path:
+
+```bash
+# Force zenity even on a KDE box (must have zenity installed)
+sudo pacman -S zenity
+# kdialog still wins via wiring order; uninstall kdialog or hack
+# platform/__init__.py to flip the order. There's no env knob — this is
+# rare enough that adding one is YAGNI.
+```
+
 ## Switch voice
 
 ```bash

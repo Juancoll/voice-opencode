@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase B.
+Last updated: 2026-05-18 — end of Phase C.
 
 ---
 
@@ -55,8 +55,8 @@ published on GitHub.
 | 0     | Platform abstraction layer         | ✅ done (63f0755) |
 | A     | Windows + workspaces (CLI + tray)  | ✅ done       |
 | B     | Clipboard (read/write + tools/CLI) | ✅ done       |
-| C     | Notify / ask_user / confirm (kdialog→zenity) | ⏭ next |
-| D     | Capacity modes (read-only/assist/full) filtering MCP tools | pending |
+| C     | Notify / ask_user / confirm (kdialog→zenity) | ✅ done |
+| D     | Capacity modes (read-only/assist/full) filtering MCP tools | ⏭ next |
 | H     | Audio / media (wpctl + playerctl backends) | pending  |
 | I     | Apps (launch_app, list windows enriched) | pending    |
 | J     | Audit viewer + kill switch en tray | pending       |
@@ -64,7 +64,38 @@ published on GitHub.
 | F     | OCR find_text (Tesseract)          | pending       |
 | G     | Memory (Markdown plano)            | pending       |
 
-## What just shipped (Phase B, this commit)
+## What just shipped (Phase C, this commit)
+
+- `backends/linux_dialog_kde/kdialog_backend.py`: real implementation
+  (was a stub). `--yesno` / `--inputbox` / `--menu` with the shared
+  exit-code contract from ADR-0013 (rc 0 → answer/True; rc 1 →
+  None/False; other → `BackendError` with stderr). `ask_choice` passes
+  each option twice (tag + description) so the returned tag matches the
+  choice string. Empty `choices` → fail-fast `BackendError`.
+  Capabilities `DIALOG_{CONFIRM,ASK_TEXT,ASK_CHOICE}`. Timeout 300 s
+  (interactive).
+- `backends/linux_dialog_gtk/zenity_backend.py`: real implementation
+  with the same contract, same caps, same timeout. Uses `--question` /
+  `--entry` / `--list --column=Option`.
+- `platform/__init__.py`: wiring unchanged — kdialog preferred,
+  zenity fallback via the existing `_try()` chain.
+- `mcp_server.py`: new `_register_dialogs(mcp)` exposing four tools:
+  `notify` (fire-and-forget, no lock), `ask_confirm` → `"yes"`/`"no"`,
+  `ask_user` / `ask_choice` returning the answer or `""` on cancel.
+  Blocking tools wrap `with _acting():` so F9 is dropped while the
+  user is in the dialog.
+- `cli.py`: new `voice dialog {notify|confirm|ask|choose}` group.
+  `confirm` uses rc=0 / rc=2 / rc=1 (yes / no / error) so shells can
+  distinguish. `ask` / `choose` print the answer to stdout, nothing on
+  cancel.
+- 126 tests verde (eran 96): +19 in `test_backend_dialog.py` covering
+  both backends; +11 in `test_cli.py` for the new dialog group.
+- Smoke live OK: notify shows toast; kdialog window verified visible
+  via `./voice windows find kdialog` (class `org.kde.kdialog`).
+- ruff + mypy verde (51 source files).
+- New skill: `_ai/SKILLS/build-dialog-backend.md`.
+
+## Previously shipped (Phase B)
 
 - `backends/linux_clipboard_x11/xclip_backend.py`: real implementation
   (was a stub raising `BackendError`). `xclip -selection
@@ -79,32 +110,24 @@ published on GitHub.
   {read|write|read-primary|write-primary}` group. Write subcommands
   accept inline args (joined with spaces) or read from stdin when no
   args. Reads go to stdout without a trailing newline.
-- 96 tests verde (eran 71): +18 in `test_backend_clipboard.py`
-  covering both backends (init guards, capabilities, argv shape for
-  read/write & primary variants, empty-selection → "", failures,
-  timeouts); +7 in `test_cli.py` covering the new clipboard group.
-- Smoke live OK on Wayland real: round-trip write/read on both
-  selections, stdin path also works.
-- ruff + mypy verde (51 source files, no new modules).
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase C — Dialogs.** Implementar
-   `linux_dialog_kde/kdialog_backend.py` real (currently stub raising
-   `BackendError`). Capabilities `dialog.notify`, `dialog.ask_user`,
-   `dialog.confirm`. CLI `voice dialog ask "..."`. MCP tool
-   `ask_user` con timeout. Fallback a
-   `linux_dialog_gtk/zenity_backend.py`.
-2. **Phase D — Capacity modes.** En `mcp_server.py` filtrar
+1. **Phase D — Capacity modes.** En `mcp_server.py` filtrar
    herramientas según `settings.capacity_mode`:
    - `read-only`: sólo `list_*`, `find_*`, `active_*`, `capture_*`,
-     `clipboard_read`, `platform_info`.
-   - `assist` (default): + write WM, type/click confirmados, dialogs.
+     `clipboard_read`, `platform_info`, `notify` (no input from user).
+   - `assist` (default): + write WM, type/click confirmados, dialogs
+     completos (`ask_confirm`/`ask_user`/`ask_choice`), `clipboard_write`.
    - `full`: + `run_shell` (Phase E), todo.
-3. **Phase H — Audio / media.** Implementar
+   Plan: añadir `_capacity_allows(tool_name)` y envolver cada
+   `_register_*` con un filtro. Tests deben cubrir las 3 modes.
+2. **Phase H — Audio / media.** Implementar
    `linux_audio_pipewire/wpctl_backend.py` + `playerctl_backend.py`
    (stubs). Capabilities `audio.*` + `media.*`. CLI `voice audio
    {get|set|mute}` / `voice media {play|next|prev|status}`. MCP tools.
+3. **Phase I — Apps.** `launch_app` (gtk-launch / xdg-open),
+   `list_windows` enriched con icono/app-id.
 
 ## Critical context to keep in your head
 
@@ -112,7 +135,8 @@ published on GitHub.
   `gist, read:org, repo, workflow`).
 - Repo público: <https://github.com/Juancoll/voice-opencode>, branch
   `main`. Commits previos: `40a41db`, `9d231ac`, `69e82c2`, `63f0755`,
-  `f95ad2f`, + el commit Phase B que estás creando ahora.
+  `f95ad2f`, `30fc0cd` (Phase B), + el commit Phase C que estás
+  creando ahora.
 - Wrapper `./voice` exporta `PYTHONPATH=src` antes de
   `python -m voice_opencode`. Activa el venv local.
 - ydotool socket en `/run/user/1000/.ydotool_socket`.
@@ -145,6 +169,10 @@ published on GitHub.
   `backends/<os>_<system>/`); consumidores nunca importan backends;
   capability-driven MCP tool registration; Null backends raise
   `NotSupportedError`.
+- ADR-0013: Dialog backends shared exit-code contract (rc 0 → answer,
+  rc 1 → cancel/None, other → BackendError); kdialog preferred,
+  zenity fallback; notify as a separate Protocol; MCP tools translate
+  Python `None` → `""` and `True`/`False` → `"yes"`/`"no"`.
 
 ## Environment variables (optional)
 
@@ -160,14 +188,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 96 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 126 passing
 venv/bin/ruff check src tests                # all clean
 venv/bin/mypy src/voice_opencode             # no issues, 51 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase C.
+If any of those fail, fix them **before** starting Phase D.
 
 ## Files to read first when resuming
 

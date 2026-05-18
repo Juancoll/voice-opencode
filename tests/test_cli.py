@@ -219,3 +219,135 @@ def test_clipboard_unknown_subcommand_returns_1(tmp_state, monkeypatch):
     rc = cli.main(["clipboard", "frobnicate"])
     assert rc == 1
 
+
+# ---------------------------------------------------------------------------
+# Phase C: dialog group
+# ---------------------------------------------------------------------------
+class _FakeNotify:
+    def __init__(self):
+        self.calls: list[tuple[str, str, str]] = []
+
+    def show(self, title: str, body: str = "", urgency: str = "normal") -> None:
+        self.calls.append((title, body, urgency))
+
+
+class _FakeDialog:
+    def __init__(
+        self,
+        *,
+        confirm_result: bool = True,
+        ask_text_result: str | None = "answer",
+        ask_choice_result: str | None = "b",
+    ):
+        self.confirm_result = confirm_result
+        self.ask_text_result = ask_text_result
+        self.ask_choice_result = ask_choice_result
+        self.confirm_calls: list[tuple[str, str]] = []
+        self.ask_text_calls: list[tuple[str, str, str]] = []
+        self.ask_choice_calls: list[tuple[str, list[str], str]] = []
+
+    def confirm(self, message, title="Confirm"):
+        self.confirm_calls.append((message, title))
+        return self.confirm_result
+
+    def ask_text(self, prompt, default="", title="Input"):
+        self.ask_text_calls.append((prompt, default, title))
+        return self.ask_text_result
+
+    def ask_choice(self, prompt, choices, title="Choose"):
+        self.ask_choice_calls.append((prompt, list(choices), title))
+        return self.ask_choice_result
+
+
+def test_dialog_notify_calls_backend(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    n = _FakeNotify()
+    monkeypatch.setattr(cli.plat, "notify", n, raising=False)
+    rc = cli.main(["dialog", "notify", "Hola", "body text", "critical"])
+    assert rc == 0
+    assert n.calls == [("Hola", "body text", "critical")]
+
+
+def test_dialog_notify_defaults(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    n = _FakeNotify()
+    monkeypatch.setattr(cli.plat, "notify", n, raising=False)
+    rc = cli.main(["dialog", "notify", "Hola"])
+    assert rc == 0
+    assert n.calls == [("Hola", "", "normal")]
+
+
+def test_dialog_confirm_yes_returns_0(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    d = _FakeDialog(confirm_result=True)
+    monkeypatch.setattr(cli.plat, "dialog", d, raising=False)
+    rc = cli.main(["dialog", "confirm", "are you sure?", "Title"])
+    assert rc == 0
+    assert d.confirm_calls == [("are you sure?", "Title")]
+
+
+def test_dialog_confirm_no_returns_2(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    d = _FakeDialog(confirm_result=False)
+    monkeypatch.setattr(cli.plat, "dialog", d, raising=False)
+    rc = cli.main(["dialog", "confirm", "really?"])
+    assert rc == 2
+
+
+def test_dialog_ask_prints_answer(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    d = _FakeDialog(ask_text_result="hello world")
+    monkeypatch.setattr(cli.plat, "dialog", d, raising=False)
+    rc = cli.main(["dialog", "ask", "name?", "def", "Title"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "hello world"
+    assert d.ask_text_calls == [("name?", "def", "Title")]
+
+
+def test_dialog_ask_cancel_prints_nothing(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    d = _FakeDialog(ask_text_result=None)
+    monkeypatch.setattr(cli.plat, "dialog", d, raising=False)
+    rc = cli.main(["dialog", "ask", "name?"])
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_dialog_choose_prints_choice(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    d = _FakeDialog(ask_choice_result="green")
+    monkeypatch.setattr(cli.plat, "dialog", d, raising=False)
+    rc = cli.main(["dialog", "choose", "color?", "red", "green", "blue"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "green"
+    assert d.ask_choice_calls == [("color?", ["red", "green", "blue"], "Choose")]
+
+
+def test_dialog_choose_requires_options(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    d = _FakeDialog()
+    monkeypatch.setattr(cli.plat, "dialog", d, raising=False)
+    rc = cli.main(["dialog", "choose", "color?"])
+    assert rc == 1
+
+
+def test_dialog_propagates_backend_error(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    from voice_opencode.platform.base import BackendError
+
+    class Broken:
+        def ask_text(self, *a, **k):
+            raise BackendError("kdialog gone")
+
+    monkeypatch.setattr(cli.plat, "dialog", Broken(), raising=False)
+    rc = cli.main(["dialog", "ask", "x"])
+    assert rc == 1
+    assert "kdialog gone" in capsys.readouterr().err
+
+
+def test_dialog_unknown_subcommand_returns_1(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    monkeypatch.setattr(cli.plat, "dialog", _FakeDialog(), raising=False)
+    rc = cli.main(["dialog", "frobnicate"])
+    assert rc == 1
+

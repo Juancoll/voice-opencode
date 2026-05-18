@@ -5,6 +5,61 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-18 — Phase C: dialogs + notifications (kdialog, zenity, MCP, CLI)
+
+- Phase 0 had wired `LibnotifyBackend` (notify-send) and stub
+  `KDialogBackend` / `ZenityBackend` raising `NotSupportedError`. Phase C
+  closes the loop: real kdialog + zenity, MCP tools the agent can call,
+  and a CLI group for parity. See ADR-0013 for the shared exit-code
+  contract.
+- ``backends/linux_dialog_kde/kdialog_backend.py``: real implementation.
+  ``confirm`` → ``--yesno`` (rc 0 yes, rc 1 no, other → BackendError),
+  ``ask_text`` → ``--inputbox`` (stdout stripped of trailing newline),
+  ``ask_choice`` → ``--menu`` with each option passed twice (tag +
+  description) so the returned tag matches the choice string exactly.
+  Empty ``choices`` raises ``BackendError("ask_choice needs at least one
+  option")``. Declares ``DIALOG_{CONFIRM,ASK_TEXT,ASK_CHOICE}``.
+  ``_TIMEOUT_S = 300.0`` because dialogs are interactive.
+- ``backends/linux_dialog_gtk/zenity_backend.py``: real implementation
+  with the same exit-code contract and the same empty-choices guard.
+  Uses ``--question``, ``--entry``, ``--list --column=Option`` for the
+  three operations. Same caps, same timeout.
+- ``platform/__init__.py``: wiring order unchanged (kdialog preferred,
+  zenity fallback). Each backend's ``__init__`` already raises
+  ``BackendError`` when the binary is missing, so the existing
+  try/fallback in ``_wire_common_linux`` just works.
+- ``mcp_server.py``: new ``_register_dialogs(mcp)`` between clipboard
+  and misc. Four tools: ``notify(title, body, urgency)`` (no lock —
+  fire-and-forget), ``ask_confirm(question, title)`` returning
+  ``"yes"``/``"no"``, ``ask_user(prompt, default, title)`` returning the
+  answer or ``""`` on cancel, ``ask_choice(prompt, choices, title)``
+  same. All three blocking ones wrap in ``with _acting():`` so F9
+  push-to-talk is silently dropped while the user is in the dialog.
+  Audit-logged through ``_guard`` like every other tool.
+- ``cli.py``: new ``voice dialog {notify|confirm|ask|choose}`` group.
+  ``confirm`` uses rc=0 for Yes and **rc=2 for No** (rc=1 is reserved
+  for backend error) so shells can distinguish; ``ask`` / ``choose``
+  print the answer to stdout or nothing on cancel. Registered in
+  ``COMMANDS`` between ``clipboard`` and ``platform``.
+- 126 tests verde (eran 96): +19 in ``test_backend_dialog.py`` covering
+  both backends end-to-end (init guards, capabilities, argv shape per
+  op, rc 0 / rc 1 / rc other, stdout stripping, empty-choices guard,
+  timeouts); +11 in ``test_cli.py`` for the new dialog group
+  (notify with default & critical urgency, confirm rc=0/2/1, ask
+  inline + cancel, choose, unknown subcommand → rc=1, BackendError
+  propagation).
+- Smoke live OK: ``./voice dialog notify "Phase C" "ok"`` shows a
+  toast; ``./voice dialog confirm`` opens a real kdialog window
+  (``./voice windows find kdialog`` confirms class ``org.kde.kdialog``,
+  title ``Phase C``); ``./voice dialog ask`` round-trips text;
+  ``./voice dialog choose red green blue`` returns the picked tag.
+- ruff + mypy verde (51 source files, no new top-level modules — the
+  two new backend files live under the existing backend packages).
+- New skill: ``_ai/SKILLS/build-dialog-backend.md`` so the next
+  rofi/wofi/yad/AppleScript backend is a copy-paste away.
+
+---
+
 ## 2026-05-18 — Phase B: clipboard surface (CLI + xclip backend + tests)
 
 - Phase 0 had wired `linux_clipboard_wayland` (wl-copy/wl-paste) and the
