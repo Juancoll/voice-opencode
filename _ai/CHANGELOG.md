@@ -3,6 +3,30 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.3: PlayerBackend + PaplayPlayerBackend
+
+- Phase A.3: add a WAV-file PlayerBackend so TTS engine and audio
+  sink become independently swappable. ``platform.player`` slot was
+  reserved in A.2; this commit fills it on Linux with
+  ``PaplayPlayerBackend`` (subprocess to ``paplay <wav>``, blocks
+  on ``wait(timeout=…)``, kills + cleans up if the deadline is hit).
+- Deliberately split from A.4 (TTS): in production today ``tts.py``
+  pipes piper-tts raw stdout straight into paplay's stdin so they
+  share fds. Introducing a WAV intermediate decouples them at the
+  cost of one tmp file per reply (imperceptible on SSD) and is
+  precisely what allows Windows to pair the same Piper backend with
+  a WASAPI player. ``tts.py`` itself is **not** rewired in A.3 —
+  A.4 will do the cut to ``synthesize()`` + ``player.play_wav()``
+  in one commit so the behaviour change is atomic.
+- New ``tests/test_backend_player.py`` (6 cases): missing paplay
+  → BackendError, capability set, missing WAV → BackendError,
+  Popen called with correct argv, timeout kills the process,
+  ``timeout_s`` propagates to ``proc.wait``. All mocked subprocess,
+  no audio played.
+- Verified: 364 tests passed (+6), ruff + mypy clean. Backend
+  exists and is wired but is not yet called from any consumer —
+  intentional, A.4 makes the cut.
+
 ## 2026-05-19 — A.2: RecorderBackend + ArecordRecorderBackend
 
 - Phase A.2: extract microphone capture into the platform surface.

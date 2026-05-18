@@ -385,6 +385,10 @@ def _wire_common_linux(
     if (b := _try(arecord_recorder.ArecordRecorderBackend,
                   "linux_audio_arecord")):
         out["recorder"] = b
+    # Voice pipeline: player (paplay) — see ADR-0023.
+    from ..backends.linux_audio_paplay import player as paplay_player
+    if (b := _try(paplay_player.PaplayPlayerBackend, "linux_audio_paplay")):
+        out["player"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):
