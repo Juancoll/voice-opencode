@@ -447,6 +447,48 @@ def cmd_workspaces(args: list[str]) -> int:
     return 0
 
 
+# ---- clipboard subgroup -----------------------------------------------------
+def cmd_clipboard(args: list[str]) -> int:
+    """
+    voice clipboard read                       — print CLIPBOARD selection
+    voice clipboard write <text...>            — write CLIPBOARD selection
+    voice clipboard read-primary               — print PRIMARY selection
+    voice clipboard write-primary <text...>    — write PRIMARY selection
+
+    With no <text...> for write/write-primary, stdin is used.
+    """
+    if not args:
+        _eprint(cmd_clipboard.__doc__)
+        return 1
+    sub, rest = args[0], args[1:]
+
+    def _payload() -> str:
+        if rest:
+            return " ".join(rest)
+        return sys.stdin.read()
+
+    try:
+        if sub == "read":
+            sys.stdout.write(plat.clipboard.read())
+        elif sub == "read-primary":
+            sys.stdout.write(plat.clipboard.read_primary())
+        elif sub == "write":
+            text = _payload()
+            plat.clipboard.write(text)
+            _eprint(f"wrote {len(text)} chars to clipboard")
+        elif sub == "write-primary":
+            text = _payload()
+            plat.clipboard.write_primary(text)
+            _eprint(f"wrote {len(text)} chars to primary")
+        else:
+            _eprint(cmd_clipboard.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
@@ -490,6 +532,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "desktop":    cmd_desktop,
     "windows":    cmd_windows,
     "workspaces": cmd_workspaces,
+    "clipboard":  cmd_clipboard,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

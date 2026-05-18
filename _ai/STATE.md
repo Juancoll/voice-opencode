@@ -22,6 +22,8 @@ session. Refresh this whenever something material changes.
 | `grim`            | Wayland screenshots                    |
 | `wtype`           | Wayland virtual keyboard               |
 | `ydotool`         | Synthetic mouse + keyboard via uinput  |
+| `wl-clipboard`    | Wayland clipboard (`wl-copy`/`wl-paste`) |
+| `xclip`           | X11 clipboard (only needed in X11 sessions) |
 | `libnotify`       | `notify-send`                          |
 | `alsa-utils`      | `arecord`                              |
 | `python`          | for the venv                           |

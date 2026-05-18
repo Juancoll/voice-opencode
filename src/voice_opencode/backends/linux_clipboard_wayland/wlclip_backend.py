@@ -46,14 +46,24 @@ class WlClipboardBackend:
         cmd = ["wl-copy"]
         if primary:
             cmd.append("--primary")
+        # wl-copy daemonises (double-fork) to serve future paste requests.
+        # If any of stdout/stderr is a pipe, the daemon child inherits the
+        # fd and subprocess.run blocks on its close → timeout. Route both
+        # to /dev/null. We lose stderr context on failure but the returncode
+        # is enough to detect breakage.
         try:
             r = subprocess.run(
-                cmd, input=text, capture_output=True, text=True, timeout=_TIMEOUT_S,
+                cmd,
+                input=text,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired as e:
             raise BackendError("wl-copy timeout") from e
         if r.returncode != 0:
-            raise BackendError(f"wl-copy failed: {r.stderr.strip()}")
+            raise BackendError(f"wl-copy failed (rc={r.returncode})")
 
     def read(self) -> str:                          return self._read(primary=False)
     def write(self, text: str) -> None:             self._write(text, primary=False)

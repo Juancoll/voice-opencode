@@ -5,6 +5,39 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-18 — Phase B: clipboard surface (CLI + xclip backend + tests)
+
+- Phase 0 had wired `linux_clipboard_wayland` (wl-copy/wl-paste) and the
+  MCP `clipboard_read` / `clipboard_write` tools. Phase B closes the
+  remaining gaps: a real X11 backend, a CLI group so the human has parity
+  with the agent, and full subprocess-mocked tests.
+- ``backends/linux_clipboard_x11/xclip_backend.py``: real implementation
+  (was a stub raising `BackendError`). `xclip -selection clipboard|primary
+  -out/-in`, 3 s timeout, empty-selection treated as `""` (xclip exits
+  non-zero in that case, same convention as the Wayland backend). All
+  four caps declared: `CLIPBOARD_{READ,WRITE,READ_PRIMARY,WRITE_PRIMARY}`.
+- ``backends/linux_clipboard_wayland/wlclip_backend.py``: fixed a real
+  hang. `wl-copy` double-forks to keep serving paste requests; if any of
+  stdout/stderr is a pipe, the daemon child inherits the fd and
+  `subprocess.run` blocks until timeout. Route both to `DEVNULL`. We lose
+  stderr context on failure but the returncode is enough to detect it.
+  Without this, every `./voice clipboard write` hung 3 s and raised.
+- ``cli.py``: new ``voice clipboard {read|write|read-primary|write-primary}``
+  group. `write` / `write-primary` accept inline args (joined with spaces)
+  or read from stdin when no args. Reads go to stdout without a trailing
+  newline (caller decides). `BackendError`/`NotSupportedError` → rc=1
+  with `error: …` on stderr (same convention as windows/workspaces).
+  Registered in `COMMANDS` between `workspaces` and `platform`.
+- 96 tests verde (eran 71): +18 in `test_backend_clipboard.py` covering
+  both backends (init guards, capabilities, argv shape for read/write &
+  primary variants, empty-selection → "", failure paths, timeouts);
+  +7 in `test_cli.py` covering the new clipboard group (read/read-primary
+  print to stdout, write inline + stdin, primary variant, BackendError
+  propagation, unknown subcommand → rc=1).
+- Smoke live OK on Wayland real: round-trip write/read on both selections,
+  stdin path also works.
+- ruff + mypy verde (51 source files, no new modules).
+
 ## 2026-05-15 — Phase A: window & workspace surface (CLI + tray + tests)
 
 - Phase 0 already exposed every Hyprland WM/workspace operation

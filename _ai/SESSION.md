@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-15 — end of Phase A.
+Last updated: 2026-05-18 — end of Phase B.
 
 ---
 
@@ -53,9 +53,9 @@ published on GitHub.
 | Phase | Topic                              | Status        |
 |-------|------------------------------------|---------------|
 | 0     | Platform abstraction layer         | ✅ done (63f0755) |
-| A     | Windows + workspaces (CLI + tray)  | ✅ done (HEAD next commit) |
-| B     | Clipboard (read/write + tools/CLI) | ⏭ next        |
-| C     | Notify / ask_user / confirm (kdialog→zenity) | pending |
+| A     | Windows + workspaces (CLI + tray)  | ✅ done       |
+| B     | Clipboard (read/write + tools/CLI) | ✅ done       |
+| C     | Notify / ask_user / confirm (kdialog→zenity) | ⏭ next |
 | D     | Capacity modes (read-only/assist/full) filtering MCP tools | pending |
 | H     | Audio / media (wpctl + playerctl backends) | pending  |
 | I     | Apps (launch_app, list windows enriched) | pending    |
@@ -64,52 +64,47 @@ published on GitHub.
 | F     | OCR find_text (Tesseract)          | pending       |
 | G     | Memory (Markdown plano)            | pending       |
 
-## What just shipped (Phase A, this commit)
+## What just shipped (Phase B, this commit)
 
-- `cli.py`: nuevos grupos `windows`, `workspaces`, `platform`. Window
-  targets aceptan `address:0x…`, `0x…`, o substring de app_id/title.
-  `BackendError`/`NotSupportedError` → rc=1 con `error: …` en stderr.
-- `tray.py`: submenús **Ventanas** y **Workspaces** lazy-rebuilt al
-  abrir (`QMenu.aboutToShow`). Cada ventana tiene sub-submenú con
-  Focus / Cerrar / Float / Fullscreen. Cada workspace switchea on
-  click. Marker `●` para focused/active.
-- `platform/__init__.py`: backend-unavailable warnings ahora exigen
-  `VOICE_DEBUG_BACKENDS=1`. Antes ensuciaban cada CLI invocation con
-  4 líneas de "kdialog/zenity/wpctl unavailable". Bug menor en
-  `__all__` (duplicación) corregido.
-- 71 tests verde (eran 57): +9 en `test_backend_hyprland.py` cubriendo
-  el write API completo verificando los argv exactos de `hyprctl
-  dispatch` (focus/close/move/resize/float/fullscreen/minimize/
-  workspace switch / move-to-workspace / send-to-monitor) +
-  list_workspaces; +5 en `test_cli.py` cubriendo platform info,
-  windows list/focus, workspaces switch, BackendError → rc=1.
-- Smoke live OK contra Hyprland real: 4 ventanas y 2 workspaces
-  detectados correctamente; `voice platform info` lista 30 capacidades.
-- ruff + mypy verde (51 source files).
+- `backends/linux_clipboard_x11/xclip_backend.py`: real implementation
+  (was a stub raising `BackendError`). `xclip -selection
+  clipboard|primary -out/-in`, 3 s timeout, empty selection treated as
+  `""` (xclip exits non-zero in that case). All four caps declared:
+  `CLIPBOARD_{READ,WRITE,READ_PRIMARY,WRITE_PRIMARY}`.
+- `backends/linux_clipboard_wayland/wlclip_backend.py`: fixed a real
+  hang. `wl-copy` double-forks to serve future pastes; if any of
+  stdout/stderr is a pipe, the daemon child inherits the fd and
+  `subprocess.run` blocks until timeout. Route both to DEVNULL.
+- `cli.py`: new `voice clipboard
+  {read|write|read-primary|write-primary}` group. Write subcommands
+  accept inline args (joined with spaces) or read from stdin when no
+  args. Reads go to stdout without a trailing newline.
+- 96 tests verde (eran 71): +18 in `test_backend_clipboard.py`
+  covering both backends (init guards, capabilities, argv shape for
+  read/write & primary variants, empty-selection → "", failures,
+  timeouts); +7 in `test_cli.py` covering the new clipboard group.
+- Smoke live OK on Wayland real: round-trip write/read on both
+  selections, stdin path also works.
+- ruff + mypy verde (51 source files, no new modules).
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase B — Clipboard.** Backend Wayland (`wl-clipboard`) ya está
-   wired y declara `clipboard.read/write`. Falta:
-   - CLI: `voice clipboard read|write [text]|read-primary|write-primary`.
-   - Posiblemente un atajo de tray "Pegar como respuesta" / "Copiar
-     última respuesta del agente".
-   - Tests con `subprocess` mockeado (mismo patrón que
-     `test_backend_hyprland`).
-   - Smoke live read/write.
-   - X11 backend `linux_clipboard_x11/xclip_backend.py` está stub —
-     implementarlo con `xclip -selection clipboard` / `primary`.
-2. **Phase C — Dialogs.** Implementar `linux_dialog_kde/kdialog_backend.py`
-   real (currently stub raising `BackendError`). Capabilities
-   `dialog.notify`, `dialog.ask_user`, `dialog.confirm`. CLI
-   `voice dialog ask "..."`. MCP tool `ask_user` con timeout. Fallback
-   a `linux_dialog_gtk/zenity_backend.py`.
-3. **Phase D — Capacity modes.** En `mcp_server.py` filtrar
+1. **Phase C — Dialogs.** Implementar
+   `linux_dialog_kde/kdialog_backend.py` real (currently stub raising
+   `BackendError`). Capabilities `dialog.notify`, `dialog.ask_user`,
+   `dialog.confirm`. CLI `voice dialog ask "..."`. MCP tool
+   `ask_user` con timeout. Fallback a
+   `linux_dialog_gtk/zenity_backend.py`.
+2. **Phase D — Capacity modes.** En `mcp_server.py` filtrar
    herramientas según `settings.capacity_mode`:
    - `read-only`: sólo `list_*`, `find_*`, `active_*`, `capture_*`,
      `clipboard_read`, `platform_info`.
    - `assist` (default): + write WM, type/click confirmados, dialogs.
    - `full`: + `run_shell` (Phase E), todo.
+3. **Phase H — Audio / media.** Implementar
+   `linux_audio_pipewire/wpctl_backend.py` + `playerctl_backend.py`
+   (stubs). Capabilities `audio.*` + `media.*`. CLI `voice audio
+   {get|set|mute}` / `voice media {play|next|prev|status}`. MCP tools.
 
 ## Critical context to keep in your head
 
@@ -117,7 +112,7 @@ published on GitHub.
   `gist, read:org, repo, workflow`).
 - Repo público: <https://github.com/Juancoll/voice-opencode>, branch
   `main`. Commits previos: `40a41db`, `9d231ac`, `69e82c2`, `63f0755`,
-  + el commit Phase A que estás creando ahora.
+  `f95ad2f`, + el commit Phase B que estás creando ahora.
 - Wrapper `./voice` exporta `PYTHONPATH=src` antes de
   `python -m voice_opencode`. Activa el venv local.
 - ydotool socket en `/run/user/1000/.ydotool_socket`.
@@ -165,14 +160,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 71 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 96 passing
 venv/bin/ruff check src tests                # all clean
 venv/bin/mypy src/voice_opencode             # no issues, 51 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase B.
+If any of those fail, fix them **before** starting Phase C.
 
 ## Files to read first when resuming
 

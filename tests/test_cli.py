@@ -123,3 +123,99 @@ def test_windows_propagates_backend_error(tmp_state, capsys, monkeypatch):
     assert rc == 1
     err = capsys.readouterr().err
     assert "nope" in err
+
+
+# ---------------------------------------------------------------------------
+# Phase B: clipboard group
+# ---------------------------------------------------------------------------
+class _FakeClipboard:
+    def __init__(self):
+        self.clip = ""
+        self.prim = ""
+        self.writes: list[tuple[str, str]] = []
+
+    def read(self) -> str:
+        return self.clip
+
+    def read_primary(self) -> str:
+        return self.prim
+
+    def write(self, text: str) -> None:
+        self.writes.append(("clip", text))
+        self.clip = text
+
+    def write_primary(self, text: str) -> None:
+        self.writes.append(("prim", text))
+        self.prim = text
+
+
+def test_clipboard_read_prints_selection(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    fake = _FakeClipboard()
+    fake.clip = "hello"
+    monkeypatch.setattr(cli.plat, "clipboard", fake, raising=False)
+    rc = cli.main(["clipboard", "read"])
+    assert rc == 0
+    assert capsys.readouterr().out == "hello"
+
+
+def test_clipboard_read_primary_prints_primary(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    fake = _FakeClipboard()
+    fake.prim = "primtxt"
+    monkeypatch.setattr(cli.plat, "clipboard", fake, raising=False)
+    rc = cli.main(["clipboard", "read-primary"])
+    assert rc == 0
+    assert capsys.readouterr().out == "primtxt"
+
+
+def test_clipboard_write_inline_args(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    fake = _FakeClipboard()
+    monkeypatch.setattr(cli.plat, "clipboard", fake, raising=False)
+    rc = cli.main(["clipboard", "write", "hola", "mundo"])
+    assert rc == 0
+    assert fake.writes == [("clip", "hola mundo")]
+    assert "wrote 10 chars" in capsys.readouterr().err
+
+
+def test_clipboard_write_primary_inline_args(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    fake = _FakeClipboard()
+    monkeypatch.setattr(cli.plat, "clipboard", fake, raising=False)
+    rc = cli.main(["clipboard", "write-primary", "p"])
+    assert rc == 0
+    assert fake.writes == [("prim", "p")]
+
+
+def test_clipboard_write_from_stdin(tmp_state, monkeypatch):
+    import io
+
+    from voice_opencode import cli
+    fake = _FakeClipboard()
+    monkeypatch.setattr(cli.plat, "clipboard", fake, raising=False)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("from stdin"))
+    rc = cli.main(["clipboard", "write"])
+    assert rc == 0
+    assert fake.writes == [("clip", "from stdin")]
+
+
+def test_clipboard_propagates_backend_error(tmp_state, capsys, monkeypatch):
+    from voice_opencode import cli
+    from voice_opencode.platform.base import BackendError
+
+    class Broken:
+        def read(self): raise BackendError("xclip missing")
+
+    monkeypatch.setattr(cli.plat, "clipboard", Broken(), raising=False)
+    rc = cli.main(["clipboard", "read"])
+    assert rc == 1
+    assert "xclip missing" in capsys.readouterr().err
+
+
+def test_clipboard_unknown_subcommand_returns_1(tmp_state, monkeypatch):
+    from voice_opencode import cli
+    monkeypatch.setattr(cli.plat, "clipboard", _FakeClipboard(), raising=False)
+    rc = cli.main(["clipboard", "frobnicate"])
+    assert rc == 1
+
