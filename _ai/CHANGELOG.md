@@ -3,6 +3,49 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — Phase B + ADR-0024: multi-distro installer, XFCE binds, Windows plan
+
+- Phase B (single commit, since B.1-B.6 are inherently entangled in
+  one ``install.sh`` rewrite): ``install.sh`` now detects the
+  package manager (``pacman``/``apt``/``dnf``) and ships an explicit
+  package matrix per distro. On apt/dnf hosts where whisper.cpp and
+  piper-tts are not packaged, the installer fetches the upstream
+  binaries into ``vendor/`` (piper from GitHub releases, whisper.cpp
+  shallow-cloned and built with cmake) and writes ``.voice-env``
+  with ``PIPER_BIN``/``WHISPER_BIN`` pointing at them. The ``voice``
+  wrapper sources ``.voice-env`` if present.
+- New ``IS_XFCE`` detector. On XFCE the installer wires F9 to
+  ``voice toggle`` and Super+F9 to ``voice reset`` via
+  ``xfconf-query`` on the ``xfce4-keyboard-shortcuts`` channel.
+  XFCE has no press/release events, so F9 falls back to toggle
+  semantics (already supported by ``cli.toggle`` since ADR-0001).
+- New XDG autostart ``.desktop`` dropped in ``~/.config/autostart/``
+  on every non-Hyprland host so the tray launches at session start
+  without DE-specific glue. Hyprland keeps its native ``exec-once``.
+- Dialog-backend choice relaxed: ``_dialog_choice()`` picks
+  ``kdialog`` on KDE *or* Hyprland *or* if it's already installed,
+  otherwise ``zenity`` (avoids pulling GTK onto a Qt-only host).
+- README rewritten with three install paths (Arch / Debian-Ubuntu-
+  Linux Lite / Fedora) and a manual-bind table for other DEs.
+  ``.gitignore`` adds ``vendor/`` and ``.voice-env``.
+- ADR-0022 "Multi-distro install policy (pacman / apt / dnf)"
+  documents the rationale, the explicit-matrix decision over
+  name-mangling, the vendored-binary mechanism, and the rules for
+  adding a new distro later (one ``case`` branch, no other
+  changes).
+- ADR-0024 "Windows as second platform: scope and deferral plan
+  (Phase C)" captures the Phase C plan without writing any code:
+  per-subsystem mapping table (which Linux backend maps to which
+  Windows implementation), in-scope vs out-of-scope features,
+  alternatives considered (WSL2, PyInstaller, Tauri shell),
+  cross-session development workflow, and open questions to revisit
+  during implementation. Phase C will run on the Windows machine
+  in a separate opencode session.
+- Verified: ``install.sh`` re-runs idempotently on Arch/Hyprland
+  (zero changes), 412 tests still pass, ruff + mypy clean,
+  ``bash -n install.sh && bash -n voice`` syntax-OK. Live audit
+  on apt/dnf/XFCE deferred to the Linux Lite machine.
+
 ## 2026-05-19 — A.8: ADR-0023 captures the Phase A architectural intent
 
 - Wrote ADR-0023 "Voice pipeline as platform surfaces (Phase A)"

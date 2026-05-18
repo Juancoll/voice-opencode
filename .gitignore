@@ -16,6 +16,11 @@ models/*.bin
 voices/*.onnx
 voices/*.onnx.json
 
+# Vendored upstream binaries on distros without packaged piper/whisper.
+# Re-fetchable via install.sh.
+vendor/
+.voice-env
+
 # Runtime
 logs/
 config.json

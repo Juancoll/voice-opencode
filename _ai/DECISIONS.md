@@ -5,6 +5,170 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0024 — Windows as second platform: scope and deferral plan (Phase C)
+
+Date: 2026-05-19
+
+### Context
+
+Phase A (ADR-0023) extracted every voice-pipeline subsystem behind
+`platform/` Protocols so the recorder, player, TTS, STT, and log
+viewer can each be swapped for an OS-native implementation without
+touching consumer code. Phase B (ADR-0022) generalised `install.sh`
+to pacman/apt/dnf with vendored upstream binaries on distros that
+don't package whisper.cpp and piper-tts.
+
+This ADR covers Phase C — bringing Windows up to second-platform
+parity. The work has *not* been started; this document captures the
+plan so it can be implemented in one focused session on the Windows
+machine without re-deriving the architecture.
+
+The user has a Windows box and wants `voice-opencode` working there
+with the same CLI, the same MCP surface, and the same tray. The
+Phase A/B architecture was specifically built to make this a wiring
+job, not a port.
+
+### Decision
+
+Implement Windows as a third platform under `backends/windows_*`
+following the same Protocol/wiring discipline as Linux. Defer the
+actual code to a separate session run *on the Windows machine* (the
+opencode CLI keeps repo state synchronised; the dev workflow will be:
+push from Linux, pull on Windows, work in Windows opencode, push,
+pull back on Linux to review).
+
+**In scope for Phase C:**
+
+| Subsystem      | Linux today                       | Windows plan                                   |
+|----------------|-----------------------------------|------------------------------------------------|
+| `recorder`     | `linux_audio_arecord`             | `windows_audio_wasapi` (PyAudio or sounddevice — 16 kHz mono S16) |
+| `player`       | `linux_audio_paplay`              | `windows_audio_wasapi` (winsound.PlaySound or sounddevice playback) |
+| `tts`          | `common_piper` (works as-is)      | reused — only `PIPER_BIN` points at `piper.exe` |
+| `stt`          | `common_whisper_cpp` (works as-is)| reused — only `WHISPER_BIN` points at `whisper-cli.exe` |
+| `notify`       | libnotify via `notify-send`       | `windows_notify_winrt` (Toast via WinRT) or fall back to taskbar balloon |
+| `screen`       | `wlroots`/`grim` or `scrot`       | `windows_screen_mss` (mss is cross-platform; trivially zero-dep) |
+| `clipboard`    | wl-clipboard / xclip              | `windows_clipboard_winapi` (pywin32 OpenClipboard / pyperclip) |
+| `wm`           | hyprctl                           | `windows_wm_uia` — list/focus via `pywinauto`/UIA; resize via `SetWindowPos` |
+| `input`        | wtype / ydotool                   | `windows_input_sendinput` — `SendInput` for keys/mouse (no admin needed) |
+| `apps`         | `gtk-launch` + `.desktop`         | `windows_apps_startmenu` — enumerate `%APPDATA%\Microsoft\Windows\Start Menu` `.lnk` files; launch via `os.startfile` |
+| `shell`        | `linux_shell_posix`               | `windows_shell_powershell` — same allowlist contract, dispatch via `pwsh -NoProfile -Command` |
+| `ocr`          | `linux_ocr_tesseract`             | reused — tesseract for Windows is binary-compatible; vendored |
+| `media`        | `wpctl` + `playerctl`             | `windows_media_smtc` — `WindowsMediaControl` via WinRT bindings |
+| `logview`      | `linux_logview_terminal`          | `windows_logview_powershell` — opens a console with `Get-Content -Wait` |
+| `dialog`       | kdialog / zenity                  | `windows_dialog_winforms` — `MessageBox.Show` via pythonnet, or `tkinter.messagebox` as zero-dep fallback |
+| keybind        | Hyprland conf / xfconf-query      | global hotkey via `keyboard` package or a tiny C# helper running in the tray; F9 → `voice toggle` |
+| autostart      | XDG `.desktop`                    | Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` or Startup folder `.lnk` |
+| installer      | `install.sh` (bash)               | `install.ps1` (PowerShell) — mirrors the bash flow: detect pip, create venv, fetch piper.exe/whisper.cpp.exe via Invoke-WebRequest, write a `.voice-env.ps1`, drop a Startup shortcut |
+| paths          | `runtime_dir()`/`state_dir()`/`config_dir()` already branch on `sys.platform` (Phase A.6) | re-uses A.6 helpers as-is — `%LOCALAPPDATA%\voice-opencode\runtime` etc. |
+
+**Out of scope for Phase C MVP:**
+
+- MPRIS-style cross-app media keys (Windows SMTC works differently;
+  bind to specific players only if requested).
+- OCR — defer until a user asks; tesseract works but the use cases
+  (Hyprland-window-aware screenshot pipeline) don't translate
+  one-to-one to Windows windowing yet.
+- Wake-word / always-on — same anti-goal as Linux (ADR-0001).
+- Multi-monitor virtual desktops — Windows 10/11 virtual desktops
+  API is awkward; defer until a user uses them.
+- macOS — separate ADR if and when, not bundled with Windows.
+
+**Deferral mechanism.** All Windows code lives under
+`backends/windows_*` (currently `windows_stub/` is an empty
+placeholder). The Phase A wiring in `platform/__init__.py` already
+has a `_wire_windows()` branch ready (matching `_wire_common_linux`
+on the dispatch by `sys.platform` / `detect_platform()`); today it
+no-ops to the Null backends. Phase C implementation = fill in the
+backends, populate `_wire_windows`, and write `install.ps1`. No
+changes needed to any module outside `backends/windows_*` and
+`install.ps1`.
+
+### Alternatives considered
+
+1. **Run under WSL2 + WSLg** instead of native Windows. Rejected:
+   the user wants native Windows behaviour (Start Menu integration,
+   global hotkeys binding to a Windows session, tray in the Windows
+   notification area). WSL2 would force a Linux desktop session
+   running atop Windows, which defeats the point.
+2. **Use PyInstaller + ship a one-file `.exe`** instead of a
+   git-clone-and-install flow. Rejected as the *default*: a one-file
+   exe hides the venv, breaks editable dev iteration, and complicates
+   shipping the `.lnk`/MCP integration. May be revisited later as an
+   *additional* distribution channel for non-developer users.
+3. **Embed a Python interpreter in a native wrapper** (Tauri/Electron
+   shell). Rejected: this is a 1500-LOC project, not a desktop app
+   that benefits from a JS frontend.
+4. **Skip Windows entirely** and focus on more Linux distros.
+   Rejected: the user explicitly wants Windows support and the
+   Phase A architecture investment was made on the explicit
+   assumption that Windows would follow. Walking that back would
+   waste the design.
+5. **Use the `keyboard` pip package on Windows but vendor a tiny
+   `xremap`-style helper** for global hotkeys. The `keyboard` package
+   is the simpler default; revisit if it proves unreliable on Windows
+   11 with secure-input apps.
+
+### Consequences
+
+Positive:
+
+- Estimated implementation: one focused session per backend,
+  roughly 4–6 sessions total. The Phase A architecture caps the
+  surface area per backend at ~80 LOC + ~50 LOC of tests. No
+  cross-cutting changes; each backend can be reviewed and merged
+  independently.
+- The CLI (`voice ...`), the tray (PyQt6 QSystemTrayIcon works on
+  Windows out of the box), and the MCP server are platform-agnostic
+  consumers — they need zero changes.
+- `common_piper` and `common_whisper_cpp` will be reused as-is. The
+  decision to name them `common_` (ADR-0023) pays off here: no
+  rename, no file move, just point `PIPER_BIN`/`WHISPER_BIN` at the
+  `.exe` paths in `install.ps1`.
+- `paths.py` already branches on `sys.platform` (Phase A.6), so the
+  state/runtime/config directory plumbing works the day a Windows
+  backend is wired.
+
+Negative / mitigations:
+
+- Cross-session development overhead: edits made on Linux must be
+  pulled on Windows and vice-versa. Mitigated by treating the repo
+  as the source of truth and using opencode on both ends. Sessions
+  on each machine should always pull before starting.
+- Windows pip + venv on Windows have their own peculiarities (long
+  paths, file locks held by antivirus). The install.ps1 will need
+  explicit error messages for these; not insurmountable but worth a
+  half-session of polish.
+- `pyaudio`/`sounddevice` may pull native deps. Acceptable: the
+  Windows binary wheels ship prebuilt.
+- pywin32 / pythonnet / mss are larger dep closures than the Linux
+  side. Trade-off accepted — the alternative is shelling out to
+  PowerShell for every WM call, which is slow and brittle.
+
+Open questions (do not block Phase C; revisit before implementation):
+
+- Should the Windows installer prefer scoop/chocolatey for system
+  deps where available, or stick to manual `Invoke-WebRequest`?
+  Leaning towards manual to avoid forcing a package manager onto
+  the user.
+- Single global hotkey listener (one process registers F9 once and
+  routes to `voice toggle`) vs spawning `voice toggle` per press?
+  Linux Hyprland spawns per press; Windows would prefer the persistent
+  approach to avoid Python startup latency. Decide during impl.
+
+Rules going forward:
+
+- Anything Windows-only goes under `backends/windows_*` with a
+  matching capability constant and Null fallback.
+- Consumer code (CLI, tray, MCP, pipeline) must remain
+  OS-agnostic. Reviewer enforces by grep'ing for `sys.platform` /
+  `os.name` outside of `paths.py` and `platform/__init__.py`.
+- `install.ps1` is the Windows counterpart of `install.sh`. Both
+  scripts should produce the same "user-visible" state — same tray,
+  same MCP integration, same key bind contract — diverging only in
+  the implementation.
+
+---
+
 ## ADR-0023 — Voice pipeline as platform surfaces (Phase A)
 
 Date: 2026-05-19
@@ -184,6 +348,183 @@ Rules going forward:
 - Consumer modules in `src/voice_opencode/` may import from
   `.platform` but never directly from `.backends` — that boundary
   keeps the Phase A separation enforceable by static analysis.
+
+---
+
+## ADR-0022 — Multi-distro install policy (pacman / apt / dnf)
+
+Date: 2026-05-19
+
+### Context
+
+`install.sh` was hard-coded to `pacman` from day one (the project
+started on CachyOS). After Phase A introduced `common_piper` and
+`common_whisper_cpp` backends with `PIPER_BIN`/`WHISPER_BIN`
+environment overrides, the Python side was actually portable to any
+Linux distro. The remaining barrier was the installer:
+
+1. `install.sh` aborted on non-Arch hosts (`pacman not found`).
+2. Even if it didn't, package names differ across distros:
+   `libnotify` vs `libnotify-bin`, `gtk3` vs `libgtk-3-bin`,
+   `tesseract-data-spa` vs `tesseract-ocr-spa` vs
+   `tesseract-langpack-spa`, `python` vs `python3`, etc.
+3. The two pieces that *most* need to be local — `whisper.cpp` and
+   `piper-tts` — exist in Arch's AUR-adjacent repos (`whisper.cpp`,
+   `piper-tts-bin`) but not in Debian/Ubuntu/Fedora repos.
+4. Keybinds were Hyprland-only via `~/.config/hypr/conf.d/voice.conf`.
+   A Linux Lite/XFCE user had no automated path to bind F9.
+
+The target second platform is **Linux Lite / Ubuntu / XFCE / X11**
+(user's daily-driver laptop). The original goal — "this app should
+not require recompilation, package porting, or distro forks to run
+on a different Linux box" — needs the installer to take ownership of
+the distro differences.
+
+### Decision
+
+Extend `install.sh` along three orthogonal axes — package manager,
+vendored binaries, and keybind backend — all detected at runtime.
+The Python side is untouched.
+
+**1. Package-manager detection.** A small `PKG_MGR` probe runs
+`pacman`/`apt`/`dnf` in fixed order; first found wins. Three explicit
+package arrays follow (one `case "$PKG_MGR" in` block) that list the
+distro-specific name for each logical dependency. Two helpers
+abstract the query and install commands:
+
+```bash
+pkg_query_installed pkgname  # echoes 1 / 0
+pkg_install pkg1 pkg2 ...    # uses the right command for the PM
+```
+
+No clever name-mangling — every distro gets its own explicit list.
+This makes the matrix grep-able: a maintainer who wants to know
+"does this distro install zenity?" can `grep -A 20 'apt)' install.sh`
+and read the answer in five seconds.
+
+**2. Vendored binaries.** When `PKG_MGR` is `apt` or `dnf`, the
+script declares `VENDORED=( whisper-cli piper-tts )` and runs two
+small downloaders after package install:
+
+- `piper`: fetch the official x86_64 tarball from
+  `rhasspy/piper` GitHub releases, extract to `vendor/piper/`.
+- `whisper.cpp`: shallow-clone, build with cmake (or fall back to
+  make), install the `whisper-cli` binary to `vendor/whisper.cpp/`.
+
+Both are skipped when the binary is already present (idempotent).
+Versions are pinned via `${PIPER_VER}`/`${WHISPER_VER}` env vars
+with sensible defaults. The script then writes `.voice-env`:
+
+```bash
+export PIPER_BIN="$ROOT/vendor/piper/piper"
+export WHISPER_BIN="$ROOT/vendor/whisper.cpp/whisper-cli"
+```
+
+The wrapper script (`./voice`) sources `.voice-env` if it exists,
+which is exactly the mechanism the Python backends already honour.
+Vendored content is `.gitignore`d (with `vendor/` and `.voice-env`)
+so it never ends up in source control.
+
+**3. Keybind backend.** A new `IS_XFCE` detector mirrors `IS_KDE`
+(matches `XFCE/xfce/Xfce` in `XDG_CURRENT_DESKTOP` /
+`XDG_SESSION_DESKTOP`). On XFCE the script calls `xfconf-query` on
+the `xfce4-keyboard-shortcuts` channel:
+
+```bash
+xfconf-query -c xfce4-keyboard-shortcuts \
+    -p /commands/custom/F9 --create -t string -s "$ROOT/voice toggle"
+xfconf-query -c xfce4-keyboard-shortcuts \
+    -p /commands/custom/<Super>F9 --create -t string -s "$ROOT/voice reset"
+```
+
+XFCE has no press/release keyboard events at the shortcut layer
+(only single-press triggers), so F9 falls back to **toggle**
+semantics on XFCE — exactly the contract `cli.toggle` was written
+for and that ADR-0001 anticipated as the non-Hyprland behaviour.
+
+A separate XDG-autostart `.desktop` is dropped into
+`~/.config/autostart/` on every non-Hyprland host so the tray
+launches with the session without needing DE-specific glue. Hyprland
+keeps using its native `exec-once` in `~/.config/hypr/conf.d/`.
+
+The dialog-backend choice (`kdialog` vs `zenity`) is also slightly
+relaxed: a single `_dialog_choice()` helper picks `kdialog` if the
+host is KDE, Hyprland, or already has `kdialog` installed; otherwise
+`zenity`. This avoids needlessly pulling GTK onto a Wayland host
+that already has Qt anyway.
+
+### Alternatives considered
+
+1. **One installer per distro** (`install-arch.sh`,
+   `install-debian.sh`, …). Rejected: duplicates 80 % of the script
+   for the sake of avoiding one `case` block.
+2. **Generate the package list from a YAML file** parsed by Python.
+   Rejected: would force users to run Python *before* installing
+   Python in the venv, and parsing in bash via `yq` adds another
+   distro-specific dependency.
+3. **Ship a Snap / Flatpak / AppImage**. Rejected: the project's
+   value proposition is "your local box, your binaries, your audio
+   stack". A sandboxed bundle breaks PipeWire access, `/dev/uinput`
+   access, `xfconf-query`, and the whole point of being a tray app
+   that integrates with the user's session.
+4. **Cargo-style build whisper.cpp from source on every distro**
+   instead of vendoring upstream piper binaries. Considered for
+   parity; we do build whisper.cpp from source (no upstream Linux
+   binary release) but we fetch piper as a binary because their
+   releases include both the executable and the espeak-ng runtime,
+   which is non-trivial to build from scratch.
+5. **Use `pipx`/`uvx` to install the Python side, system packages
+   for system deps**. Rejected: editable install in a project venv
+   is what the dev workflow has always used; switching deployment
+   strategies isn't a portability problem.
+
+### Consequences
+
+Positive:
+
+- One installer, three distros. The `case "$PKG_MGR"` block is the
+  *only* per-distro branch in the entire script. Adding `zypper` or
+  `pkg` later is a 30-line copy/paste.
+- The Linux Lite/XFCE target works end-to-end with no manual steps
+  beyond `git clone && ./install.sh`. Verified on the dev box
+  (Arch/Hyprland) for the regression direction; the new branches
+  for apt/dnf/XFCE will get a live test on the Linux Lite machine.
+- `vendor/` keeps the repo source-only while letting end users
+  reproduce the binary install with `rm -rf vendor/ .voice-env &&
+  ./install.sh`.
+- `xfconf-query` is the same tool every XFCE-bind GUI uses under
+  the hood, so the bindings appear in
+  *Settings → Keyboard → Application Shortcuts* and the user can
+  edit them through the GUI if they want.
+
+Negative / mitigations:
+
+- Building whisper.cpp from source on a first install on Debian
+  takes 3–8 minutes. Acceptable — it happens once. A future ADR may
+  swap to a self-built GitHub release tarball if upstream starts
+  publishing one.
+- `${PIPER_VER}`/`${WHISPER_VER}` are pinned. They will need bumping
+  periodically; bump → commit → run `install.sh` again. The script
+  is idempotent for unchanged versions and re-fetches when the
+  vendored binary is missing.
+- Three package matrices in the script. Yes — the alternative is
+  worse (see alternative 1). The matrices are explicit, grep-able,
+  and only the maintainer touches them.
+- XFCE toggle semantics differ from Hyprland push-to-talk. Already
+  documented in ADR-0001 and surfaced to the user in the README and
+  in `install.sh`'s final warnings.
+
+Rules going forward:
+
+- Adding a new distro = new branch in `case "$PKG_MGR"`. No other
+  file changes.
+- Adding a new system dependency = list it in *every* per-PM array
+  with the correct distro name. Reviewer enforces this by reading
+  the matrix.
+- Vendored binaries live under `vendor/<project>/`. Use them via
+  `PIPER_BIN`/`WHISPER_BIN` (or analogous env vars for future
+  projects). Never `cp` into `/usr/local/bin` — keep installs
+  user-scoped to the repo so uninstall is `rm -rf`.
 
 ---
 

@@ -37,20 +37,64 @@ Everything is local. No cloud STT, no cloud TTS, no telemetry.
 
 ## Quickstart
 
-Arch / CachyOS only for now (the installer detects your display server
-and desktop environment and picks the right packages).
+The installer auto-detects your package manager (`pacman`/`apt`/`dnf`),
+display server (Wayland/X11), and desktop (Hyprland / XFCE / other),
+then picks the right packages and bind paths.
+
+### Arch / CachyOS (Hyprland, KDE, anything)
 
 ```bash
-git clone https://github.com/Juancoll/voice-opencode ~/gitr/voice-opencode
-cd ~/gitr/voice-opencode
+git clone https://github.com/Juancoll/voice-opencode ~/git/voice-opencode
+cd ~/git/voice-opencode
 ./install.sh                  # pacman deps + venv + voices + systemd units
-systemctl --user enable --now opencode-serve.service
-hyprctl reload                # picks up the F9 bind
+hyprctl reload                # picks up the F9 bind (Hyprland only)
 voice tray &                  # system tray icon
 ```
 
-Press **F9**, hold, talk, release. The reply is spoken back and shown in
-the tray.
+### Linux Lite / Ubuntu / Debian (XFCE or any DE)
+
+Same script, different package manager — auto-detected. `whisper.cpp`
+and `piper-tts` are **not** in apt repos; the installer fetches the
+official upstream binaries into `vendor/` (idempotent; only on first
+run) and the wrapper sources `.voice-env` to put them on PATH.
+
+```bash
+git clone https://github.com/Juancoll/voice-opencode ~/git/voice-opencode
+cd ~/git/voice-opencode
+./install.sh                  # apt deps + venv + voices + vendored piper/whisper
+voice tray &
+```
+
+On XFCE the installer wires F9 to `voice toggle` (start/stop) and
+Super+F9 to `voice reset` via `xfconf-query`. XFCE has no
+press/release events, so F9 is a toggle rather than push-to-talk —
+see ADR-0001 for the rationale on falling back to toggle outside
+Hyprland.
+
+### Fedora / RHEL
+
+```bash
+sudo dnf install -y git
+git clone https://github.com/Juancoll/voice-opencode ~/git/voice-opencode
+cd ~/git/voice-opencode
+./install.sh                  # dnf deps + venv + voices + vendored piper/whisper
+voice tray &
+```
+
+### Manual key bindings (other DEs)
+
+If your DE isn't Hyprland or XFCE, install.sh prints the commands to
+bind by hand. The contract is:
+
+| Action                  | Command            |
+|-------------------------|--------------------|
+| Press F9 (or any key)   | `voice start`      |
+| Release F9              | `voice stop`       |
+| Single-key toggle       | `voice toggle`     |
+| Forget opencode session | `voice reset`      |
+
+Press **F9**, hold, talk, release (Hyprland) — or tap F9 to toggle
+(XFCE/other). The reply is spoken back and shown in the tray.
 
 ## What the agent can do
 

@@ -3,6 +3,12 @@
 What's installed and where, on this machine, as of the last assistant
 session. Refresh this whenever something material changes.
 
+> The repo's ``install.sh`` is now multi-distro
+> (``pacman``/``apt``/``dnf``) and binds keys on Hyprland and XFCE
+> automatically. See ADR-0022. On apt/dnf hosts, piper-tts and
+> whisper.cpp are fetched into ``vendor/`` and exposed via
+> ``.voice-env`` (sourced by the ``./voice`` wrapper).
+
 ## Host
 
 - OS: CachyOS / Arch Linux, Linux kernel ≥ 6.x
