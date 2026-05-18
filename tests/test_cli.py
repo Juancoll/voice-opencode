@@ -51,7 +51,16 @@ def test_unknown_command_returns_nonzero(tmp_state):
 # ---------------------------------------------------------------------------
 def test_platform_info_dumps_json(tmp_state, capsys, monkeypatch):
     from voice_opencode import cli
+    from voice_opencode.platform import PlatformInfo
+    fake = PlatformInfo(
+        platform="linux-hyprland",
+        session_type="wayland",
+        desktop="hyprland",
+        tools=frozenset({"hyprctl"}),
+        env={"XDG_SESSION_TYPE": "wayland"},
+    )
     monkeypatch.setattr(cli.plat, "active_platform", "linux-hyprland", raising=False)
+    monkeypatch.setattr(cli.plat, "platform_info", lambda: fake)
     monkeypatch.setattr(cli.plat, "all_capabilities", lambda: frozenset({"wm.list_windows"}))
     rc = cli.main(["platform", "info"])
     assert rc == 0
@@ -59,6 +68,8 @@ def test_platform_info_dumps_json(tmp_state, capsys, monkeypatch):
     data = json.loads(capsys.readouterr().out)
     assert data["platform"] == "linux-hyprland"
     assert "wm.list_windows" in data["capabilities"]
+    assert data["is_hyprland"] is True
+    assert "hyprctl" in data["tools"]
 
 
 def test_windows_list_calls_backend(tmp_state, capsys, monkeypatch):
