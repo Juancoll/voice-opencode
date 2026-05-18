@@ -3,6 +3,34 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.7: LogViewerBackend; tray._open_logs goes through platform
+
+- Phase A.7: the tray's "Ver logs" action used to probe
+  ``foot``/``kitty``/``alacritty``/``xterm`` inline via
+  ``subprocess.run(['which', …])`` and fall back to ``xdg-open``.
+  That probe lives in a new ``LogViewerBackend`` protocol with
+  one method ``tail_file(path)``; the Linux implementation
+  (``backends/linux_logview_terminal/logview_backend.py``)
+  preserves the exact preference order using ``shutil.which`` +
+  ``subprocess.Popen``. Wired as slot ``logview`` in
+  ``platform/__init__.py``.
+- ``tray._open_logs`` is now five lines: get the backend, call
+  ``tail_file``, log+swallow any ``BackendError`` so the tray
+  doesn't crash if no terminal exists on a minimal host.
+- New capability ``LOGVIEW_TAIL_FILE``. New Null backend
+  ``NullLogViewerBackend``. Re-export added to
+  ``platform.__all__`` and ``platform/__getattr__``'s slot set.
+- Tests (``tests/test_backend_logview.py``, 6 cases):
+  capabilities; first-installed terminal wins (probe order
+  ``foot > kitty > alacritty > xterm``); ``xdg-open`` fallback
+  when no terminal; ``BackendError`` when nothing at all;
+  ``str`` path accepted alongside ``Path``.
+- Verified: 412 tests (+6), ruff + mypy clean. The pattern
+  generalises cleanly to Windows (Phase C): swap in a
+  ``WindowsLogViewerBackend`` that runs
+  ``powershell -NoExit Get-Content -Wait`` and the tray code
+  stays unchanged.
+
 ## 2026-05-19 — A.6: cross-platform runtime / state / config dirs in paths.py
 
 - Phase A.6: introduces three OS-aware helpers in ``paths.py`` —

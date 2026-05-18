@@ -357,3 +357,22 @@ class STTBackend(Protocol):
     def capabilities(self) -> frozenset[str]: ...
 
     def transcribe(self, wav_path: Path) -> str: ...
+
+
+# ---------------------------------------------------------------------------
+# Log viewer (tray "Ver logs" action) — see ADR-0023.
+# ---------------------------------------------------------------------------
+@runtime_checkable
+class LogViewerBackend(Protocol):
+    """Open a "follow"-mode viewer on a text file (typically a log).
+
+    The tray's "Ver logs" entry uses this so the choice of terminal
+    (Linux: foot/kitty/alacritty/xterm + ``tail -f``; Windows:
+    ``powershell Get-Content -Wait`` in a console window) lives in
+    the backend rather than scattered ``subprocess.run(['which', …])``
+    probes inside ``tray.py``. Pure side-effecting; no return value.
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
+
+    def tail_file(self, path: Path) -> None: ...

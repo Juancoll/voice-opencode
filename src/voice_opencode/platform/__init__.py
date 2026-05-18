@@ -49,6 +49,7 @@ from .base import (
     ClipboardBackend,
     DialogBackend,
     InputBackend,
+    LogViewerBackend,
     MediaBackend,
     NotifyBackend,
     OCRBackend,
@@ -310,6 +311,7 @@ def _build(plat: str) -> dict[str, Any]:
         "player":    null.NullPlayerBackend(),
         "tts":       null.NullTTSBackend(),
         "stt":       null.NullSTTBackend(),
+        "logview":   null.NullLogViewerBackend(),
     }
     if plat == PLATFORM_LINUX_HYPRLAND:
         from ..backends.linux_hyprland import wm as hypr_wm
@@ -397,6 +399,11 @@ def _wire_common_linux(
     from ..backends.common_whisper_cpp import stt as whisper_stt
     if (b := _try(whisper_stt.WhisperCppSTTBackend, "common_whisper_cpp.stt")):
         out["stt"] = b
+    # Log viewer: terminal-based tail -f for the tray "Ver logs" action.
+    from ..backends.linux_logview_terminal import logview_backend
+    if (b := _try(logview_backend.TerminalLogViewerBackend,
+                  "linux_logview_terminal")):
+        out["logview"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):
@@ -440,7 +447,7 @@ def __getattr__(name: str) -> Any:
     if name in {
         "wm", "input", "screen", "clipboard", "notify", "dialog",
         "audio", "media", "apps", "shell", "ocr",
-        "recorder", "player", "tts", "stt",
+        "recorder", "player", "tts", "stt", "logview",
     }:
         _ensure_loaded()
         return _state["backends"][name]
@@ -477,6 +484,7 @@ __all__ = [
     "NotifyBackend", "DialogBackend", "AudioBackend", "MediaBackend",
     "AppLauncher", "ShellBackend", "OCRBackend",
     "RecorderBackend", "PlayerBackend", "TTSBackend", "STTBackend",
+    "LogViewerBackend",
     "Window", "Workspace", "Monitor", "Rect", "OcrMatch",
     "active_platform", "supported", "all_capabilities", "detect_platform",  # noqa: F405
     "platform_info", "PlatformInfo",

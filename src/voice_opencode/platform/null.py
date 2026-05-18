@@ -158,3 +158,7 @@ class NullTTSBackend(_NullBase):
 
 class NullSTTBackend(_NullBase):
     def transcribe(self, wav_path: Path) -> str:   raise _no("stt.transcribe")
+
+
+class NullLogViewerBackend(_NullBase):
+    def tail_file(self, path: Path) -> None:       raise _no("logview.tail_file")

@@ -311,12 +311,15 @@ class VoiceTray(QSystemTrayIcon):
         voice_cmd("pause" if checked else "resume")
 
     def _open_logs(self) -> None:
+        from . import platform as _plat
         log_file = paths.LOGS_DIR / "voice.log"
-        for term in ("foot", "kitty", "alacritty", "xterm"):
-            if subprocess.run(["which", term], capture_output=True).returncode == 0:
-                subprocess.Popen([term, "-e", "tail", "-f", str(log_file)])
-                return
-        subprocess.Popen(["xdg-open", str(log_file)])
+        try:
+            _plat.logview.tail_file(log_file)
+        except Exception as e:
+            # Backend missing or all probes failed — at least don't
+            # crash the tray. The user can still cat the file by hand.
+            from .logging import log
+            log(f"_open_logs: {e}")
 
     def _quit(self) -> None:
         self.hide()
