@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase H.
+Last updated: 2026-05-18 — end of Phase I.
 
 ---
 
@@ -58,13 +58,44 @@ published on GitHub.
 | C     | Notify / ask_user / confirm (kdialog→zenity) | ✅ done |
 | D     | Capacity modes (read-only/assist/full) filtering MCP tools | ✅ done |
 | H     | Audio / media (wpctl + playerctl backends) | ✅ done       |
-| I     | Apps (launch_app, list windows enriched) | ⏭ next       |
-| J     | Audit viewer + kill switch en tray | pending       |
+| I     | Apps (XDG launcher: list/running/launch/kill) | ✅ done    |
+| J     | Audit viewer + kill switch en tray | ⏭ next       |
 | E     | run_shell with safety rails        | pending       |
 | F     | OCR find_text (Tesseract)          | pending       |
 | G     | Memory (Markdown plano)            | pending       |
 
-## What just shipped (Phase H, this commit)
+## What just shipped (Phase I, this commit)
+
+- `backends/linux_apps_xdg/xdg_backend.py`: real XDG app launcher.
+  Manual `.desktop` parser (i18n-safe — `configparser` chokes on
+  duplicate `Name[xx]=` keys), XDG dir scan with user-dir-wins
+  dedup, `gtk-launch` for known app ids with `/proc` pid probe
+  (best-effort, returns 0 on miss), raw-command fallback via
+  detached `Popen`, `kill` via SIGTERM with pid-or-app-id
+  resolution (app id = pkill-style: every matching pid).
+- `cli.py`: new `voice apps {list|running|launch|kill}` group.
+  `launch` joins remaining argv with spaces.
+- `mcp_server.py`: new `_register_apps` with 4 tools:
+  `apps_list_installed` + `apps_list_running` (read-only),
+  `apps_launch` (assist), `apps_kill` (**full** — irreversible,
+  rationale in ADR-0015).
+- `capacity.py`: tier mapping added.
+- New **ADR-0015** documenting (1) gtk-launch over xdg-open,
+  (2) manual parser over configparser, (3) `apps_kill` in `full`
+  not `assist`.
+- 183 tests verde (eran 158): +24 in `test_backend_apps.py`,
+  +1 in `test_mcp_server.py`.
+- Smoke live OK: `./voice apps list` returned the real
+  `/usr/share/applications` set (200+ apps); `./voice apps
+  launch "/bin/sleep 30"` returned a usable pid and the
+  process was visible via `pgrep`.
+- No new runtime dep: `gtk-launch` ships with `gtk3` (already
+  present). STATE.md updated to record the dependency.
+- ruff + mypy verde (54 source files).
+- Live tool counts now: read-only 15 (eran 13), assist 39
+  (eran 36), full 41 (eran 37).
+
+## Previously shipped (Phase H)
 
 - `backends/linux_audio_pipewire/wpctl_backend.py`: real wpctl
   driver. Default sink/source aliases. Parses `Volume: 0.52` and
@@ -168,17 +199,23 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase I — Apps.** `launch_app` (gtk-launch / xdg-open),
-   `list_windows` enriched con icono/app-id. `launch_app` probablemente
-   `assist` (abre cosa nueva, reversible cerrándola). Backend Linux
-   primero (`backends/linux_apps_xdg/`) y vía MCP tool sumar al
-   `TIER_BY_TOOL`.
-2. **Phase J — Audit viewer + kill switch en tray.** Submenu "Agente"
-   con: ver `logs/agent.log` últimos N, toggle capacity_mode (con
-   restart MCP automático), pause/resume.
-3. **Phase E — run_shell con safety rails.** Tier `full`. Allowlist
-   regex de comandos, timeout estricto, captura de stdout/stderr,
-   audit verbose. ADR nuevo para la política.
+1. **Phase J — Audit viewer + kill switch en tray.** Submenu
+   "Agente" en el tray con: ver `logs/agent.log` últimos N
+   (lectura tail, viewer simple), toggle capacity_mode (con
+   restart automático del MCP server porque la lista de tools
+   se filtra en registro, ADR-0014), pause/resume del agente.
+   Sin nuevo backend; toca `tray/` + `agent.py` + posiblemente
+   un viewer Qt minimal.
+2. **Phase E — run_shell con safety rails.** Tier `full`.
+   Allowlist regex de comandos, timeout estricto, captura
+   stdout/stderr, audit verbose. ADR nuevo para la política
+   de allowlist. El stub `ShellBackend` ya existe en
+   `platform/base.py`.
+3. **Phase F — OCR find_text (Tesseract).** Tomar
+   ``screen.capture_*`` + tesseract → encontrar texto y
+   devolver bounding box. Backend nuevo
+   ``backends/linux_ocr_tesseract/``. Capability
+   ``screen.find_text``. Tier ``read-only``.
 
 ## Critical context to keep in your head
 
@@ -187,7 +224,8 @@ published on GitHub.
 - Repo público: <https://github.com/Juancoll/voice-opencode>, branch
   `main`. Commits previos: `40a41db`, `9d231ac`, `69e82c2`, `63f0755`,
   `f95ad2f`, `30fc0cd` (Phase B), `6c53357` (Phase C), `f38c0dd`
-  (Phase D), + el commit Phase H que estás creando ahora.
+  (Phase D), `f0de0b9` (Phase H), + el commit Phase I que estás
+  creando ahora.
 - Wrapper `./voice` exporta `PYTHONPATH=src` antes de
   `python -m voice_opencode`. Activa el venv local.
 - ydotool socket en `/run/user/1000/.ydotool_socket`.
@@ -246,14 +284,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 158 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 183 passing
 venv/bin/ruff check src tests                # all clean
 venv/bin/mypy src/voice_opencode             # no issues, 51 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase I.
+If any of those fail, fix them **before** starting Phase J.
 
 ## Files to read first when resuming
 

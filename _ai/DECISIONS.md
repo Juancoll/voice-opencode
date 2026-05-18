@@ -5,6 +5,92 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+---
+
+## ADR-0015 — Apps backend: gtk-launch + manual .desktop parser; `apps_kill` is `full`
+
+Date: 2026-05-18
+
+### Context
+
+Phase I exposes desktop apps to the model: list installed, list
+running, launch, kill. Three sub-decisions had non-obvious choices.
+
+### Decision
+
+**1. `gtk-launch` is the primary launcher; raw `Exec=` is a fallback.**
+`gtk-launch <app-id>` is the freedesktop-blessed way to launch a
+``.desktop`` entry: it handles ``StartupNotify``, ``DBusActivatable``,
+``%U``/``%F`` field codes, env propagation, and reparenting to PID 1
+correctly. The cost is we never see the child pid directly — we
+probe ``/proc`` for the binary's ``comm`` after a 250 ms grace
+window. When ``gtk-launch`` is missing or returns non-zero, we
+strip field codes from the ``Exec=`` line and ``Popen`` it
+ourselves with ``start_new_session=True``; that path gives a real
+pid but loses StartupNotify and any DBus activation semantics.
+
+**2. Manual ``.desktop`` parsing instead of ``configparser``.**
+Real-world ``.desktop`` files have duplicate keys for i18n
+(``Name=Firefox``, ``Name[es]=Zorro de Fuego``, ``Name[ach]=…``).
+``configparser`` in strict mode rejects duplicates; non-strict
+silently overwrites with last-wins which gives us the wrong
+locale at random. We only need 4 fields (``Name``, ``Exec``,
+``Icon``, ``NoDisplay``, plus the ``Type`` gate), so a 25-line
+manual parser that takes the *first* occurrence and skips ``[xx]``
+variants is simpler and correct.
+
+**3. ``apps_kill`` lives in the ``full`` tier, not ``assist``.**
+The conservative reading of the Phase D contract (ADR-0014) is:
+``assist`` = reversible / interactive; ``full`` = irreversible
+without user effort. ``apps_kill`` sends SIGTERM, which to a
+text editor or terminal session destroys unsaved state and there
+is no undo. The model can request it, but only when the user has
+opted into ``full`` mode. ``apps_launch`` stays in ``assist`` —
+launching an app is reversible (close/kill it) and is exactly
+the kind of operation a voice agent should help with.
+
+### Alternatives considered
+
+- **``xdg-open`` instead of ``gtk-launch``**: ``xdg-open`` is for
+  URLs and MIME types, not app ids. It works for files
+  (``xdg-open foo.pdf``) but you can't ``xdg-open firefox``.
+  Wrong tool.
+- **DBus activation via ``gdbus`` for ``DBusActivatable=true``
+  apps**: more correct, but adds a dbus parsing step for every
+  launch and only matters for a minority of apps. ``gtk-launch``
+  already does this internally.
+- **Put ``apps_kill`` in ``assist``**: would let `assist` mode
+  accidentally close an editor by ambiguous voice command
+  ("cierra firefox" intending ``close_window``, ending up at
+  ``apps_kill firefox``). Keeping it in ``full`` forces a
+  conscious capacity bump for irreversible process termination.
+- **Match ``comm`` by ``argv[0]`` from ``/proc/<pid>/cmdline``
+  instead of ``/proc/<pid>/comm``**: more robust (no 15-char
+  truncation) but slower (one read per pid + null-separated
+  parse). For our cadence (sub-second listing is fine),
+  ``comm`` is enough.
+
+### Consequences
+
+- A launch via ``gtk-launch`` may return pid=0 if the probe
+  window misses (very short-lived processes, or the binary's
+  ``comm`` differs from the basename of ``Exec=``). Documented
+  in the docstring; callers that need the pid for guaranteed
+  follow-up should use the raw-command path.
+- Apps with custom ``StartupWMClass`` (e.g. Electron apps that
+  rename their main thread) won't match by ``comm``; their pid
+  may not be findable via this backend. Future enhancement:
+  also scan ``/proc/<pid>/cmdline`` as a second pass.
+- ``apps_kill firefox`` in ``full`` mode SIGTERMs *every* running
+  ``firefox`` pid — not just one window. This mirrors
+  ``pkill firefox`` and is what the user almost certainly means
+  when they say "kill firefox". If they want a single window,
+  ``close_window <id>`` is the right tool.
+- The 250 ms probe delay adds latency to every ``apps_launch``
+  via ``gtk-launch``. Acceptable for voice cadence.
+
+---
+
 ## ADR-0014 — Capacity modes: filter MCP tools at registration, not at invocation
 **Date:** 2026-05-18
 

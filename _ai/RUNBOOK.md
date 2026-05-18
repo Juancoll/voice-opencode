@@ -156,6 +156,38 @@ No active player? Both ``status`` and the transport commands return
 expected behaviour — opening a YouTube tab and pausing it is enough
 to make a player appear.
 
+## Drive desktop apps from the CLI (Phase I)
+
+Apps are enumerated from XDG ``applications`` directories (user dir
+wins on dedup), launched via ``gtk-launch`` (correct StartupNotify /
+DBusActivatable handling) with raw-command fallback, and killed by
+SIGTERM via ``/proc`` scanning.
+
+```bash
+voice apps list                    # all installed .desktop apps (JSON)
+voice apps running                 # running pids with optional app_id match
+voice apps launch firefox          # launch by .desktop id (uses gtk-launch)
+voice apps launch "/bin/sleep 30"  # raw command (Popen, detached)
+voice apps kill 12345              # SIGTERM by pid
+voice apps kill firefox            # SIGTERM every running firefox pid
+```
+
+A launched ``gtk-launch`` returns ``pid=0`` if the 250 ms ``/proc``
+probe missed the new process (very short-lived apps, or apps whose
+``comm`` differs from the basename of ``Exec=`` — Electron apps
+that ``prctl(PR_SET_NAME)`` themselves). If you need a guaranteed
+pid, use the raw-command path: ``voice apps launch "/usr/bin/foo"``
+goes through ``Popen`` and returns the real pid.
+
+``apps kill <app-id>`` is **pkill-style**: it SIGTERMs *every*
+running pid whose ``comm`` matches the app's binary basename. If
+you wanted just one window, use ``voice windows close <addr>``
+instead.
+
+Capacity tiers: ``list`` and ``running`` are ``read-only``;
+``launch`` is ``assist``; ``kill`` is ``full`` (SIGTERM destroys
+unsaved state in editors / terminals). See ADR-0015 for why.
+
 ## Capacity modes — limit what opencode can do (Phase D)
 
 Three tiers control which MCP tools opencode sees. Switching is a
@@ -163,9 +195,9 @@ single config write; the MCP server reads the setting at startup.
 
 | Mode        | What the model can do                                            | Tool count* |
 |-------------|------------------------------------------------------------------|-------------|
-| `read-only` | Observe only — list windows, capture screen, read clipboard, notify, audio_get_volume, media_status | 13 |
-| `assist`    | + drive UI: type, click, focus, move, dialogs, write clipboard, audio set/mute, media play/next/prev | 36 |
-| `full`      | + destructive: `close_window` (and future `run_shell`)            | 37          |
+| `read-only` | Observe only — list windows, capture screen, read clipboard, notify, audio_get_volume, media_status, apps_list_* | 15 |
+| `assist`    | + drive UI: type, click, focus, move, dialogs, write clipboard, audio set/mute, media transport, apps_launch | 39 |
+| `full`      | + destructive: `close_window`, `apps_kill` (and future `run_shell`) | 41        |
 
 \* on this host. Real count depends on which backend caps are wired.
 

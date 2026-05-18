@@ -3,6 +3,62 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Phase I: apps surface (xdg launcher, MCP, CLI)
+
+- New backend ``backends/linux_apps_xdg/xdg_backend.py`` replacing
+  the ``NullAppLauncher`` stub. Four capabilities declared:
+  ``APP_{LAUNCH,LIST_INSTALLED,LIST_RUNNING,KILL}``.
+- ``list_installed`` scans XDG ``applications`` dirs (user dir wins
+  on dedup), parses ``.desktop`` files manually to skip i18n
+  ``Name[xx]=`` duplicates that would crash ``configparser`` in
+  strict mode; returns ``{id, name, exec, icon, no_display}``.
+  Filters out ``Type=Link`` (URL bookmarks); keeps ``NoDisplay=true``
+  helpers (the model may want to launch them explicitly).
+- ``list_running`` scans ``/proc/<pid>/comm`` and joins to the
+  installed-app set by the basename of ``Exec=`` (truncated to 15
+  chars per Linux comm semantics). Returns ``{pid, comm, app_id?}``.
+- ``launch`` prefers ``gtk-launch <id>`` for known ``.desktop``
+  entries (handles StartupNotify, DBusActivatable, field codes,
+  env). Since ``gtk-launch`` detaches, the child pid is recovered
+  by a ``/proc`` probe with a 250 ms grace; returns 0 if the probe
+  misses. Falls back to direct ``Popen`` of the stripped ``Exec=``
+  line if ``gtk-launch`` is missing or returns non-zero. Raw
+  commands ("/bin/sleep 30") bypass the desktop-entry path and
+  go straight to ``Popen`` with ``start_new_session=True``.
+- ``kill`` accepts int pid, digit-string pid, or app id. App id
+  is resolved against ``list_running``; SIGTERM is sent to every
+  matching pid (``pkill``-style). Swallows ``ProcessLookupError``
+  (race ok); ``PermissionError`` re-raises as ``BackendError``.
+- ``cli.py``: new ``voice apps {list|running|launch|kill}`` group.
+  ``launch`` joins all remaining argv with spaces so raw commands
+  with arguments work without quoting tricks.
+- ``mcp_server.py``: new ``_register_apps(mcp)`` with four tools:
+  ``apps_list_installed``, ``apps_list_running``, ``apps_launch``,
+  ``apps_kill``. Gated with ``_expose``; mutators wrapped in
+  ``_acting`` + audit per Phase D contract.
+- ``capacity.py``: ``apps_list_installed`` and ``apps_list_running``
+  in ``read-only``; ``apps_launch`` in ``assist``; ``apps_kill`` in
+  ``full`` (irreversible — SIGTERM destroys unsaved state). Decision
+  documented in ADR-0015.
+- New ADR-0015 covering the three sub-decisions (gtk-launch vs
+  xdg-open; manual parser vs configparser; apps_kill in full).
+- 183 tests verde (eran 158): +24 in ``tests/test_backend_apps.py``
+  covering init guards, ``.desktop`` parsing + i18n + Type=Link
+  filtering + dedup across dirs, field-code stripping,
+  ``/proc`` matching, launch paths (known/fallback/raw/error),
+  kill paths (int/string/app id/no-match/lookup/perm). +1 in
+  ``test_mcp_server.py`` covering Phase I tier placement.
+- Smoke live OK on host: ``./voice apps list`` returned 200+ apps
+  including Moonlight and my custom ``doc-viewer`` / ``image-viewer``
+  helpers; ``./voice apps launch "/bin/sleep 30"`` returned pid
+  3270083, verified with ``pgrep``. Real ``/usr/share/applications``
+  scan works; ``configparser`` would have choked on Firefox's
+  20+ ``Name[xx]=`` lines.
+- No new runtime deps: ``gtk-launch`` ships with ``gtk3``,
+  already installed. ``glib2``'s ``gio`` not required (kept the
+  backend lean).
+- ruff + mypy verde (54 source files).
+
 ---
 
 ## 2026-05-18 — Phase H: audio + media surface (wpctl + playerctl, MCP, CLI)

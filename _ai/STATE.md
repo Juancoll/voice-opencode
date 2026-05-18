@@ -29,6 +29,7 @@ session. Refresh this whenever something material changes.
 | `libnotify`       | `notify-send`                          |
 | `wireplumber`     | `wpctl` (PipeWire audio control)       |
 | `playerctl`       | MPRIS media transport CLI              |
+| `gtk3`            | `gtk-launch` (XDG app launcher, Phase I) |
 | `alsa-utils`      | `arecord`                              |
 | `python`          | for the venv                           |
 

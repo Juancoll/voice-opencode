@@ -621,6 +621,43 @@ def cmd_media(args: list[str]) -> int:
     return 0
 
 
+def cmd_apps(args: list[str]) -> int:
+    """
+    voice apps list                  — installed desktop apps (JSON)
+    voice apps running               — running apps with pids (JSON)
+    voice apps launch <id-or-cmd>    — launch by .desktop id or raw command
+    voice apps kill <pid-or-id>      — SIGTERM by pid or app id
+    """
+    if not args:
+        _eprint(cmd_apps.__doc__)
+        return 1
+    sub = args[0]
+    try:
+        if sub == "list":
+            print(json.dumps(plat.apps.list_installed(), indent=2, ensure_ascii=False))
+        elif sub == "running":
+            print(json.dumps(plat.apps.list_running(), indent=2, ensure_ascii=False))
+        elif sub == "launch":
+            if len(args) < 2:
+                _eprint("Usage: voice apps launch <id-or-cmd>")
+                return 1
+            pid = plat.apps.launch(" ".join(args[1:]))
+            print(pid)
+        elif sub == "kill":
+            if len(args) < 2:
+                _eprint("Usage: voice apps kill <pid-or-id>")
+                return 1
+            target: int | str = int(args[1]) if args[1].isdigit() else args[1]
+            plat.apps.kill(target)
+        else:
+            _eprint(cmd_apps.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
@@ -668,6 +705,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "dialog":     cmd_dialog,
     "audio":      cmd_audio,
     "media":      cmd_media,
+    "apps":       cmd_apps,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

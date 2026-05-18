@@ -122,6 +122,7 @@ def build_server() -> Any:
     _register_dialogs(mcp)
     _register_audio(mcp)
     _register_media(mcp)
+    _register_apps(mcp)
     _register_misc(mcp)
 
     return mcp
@@ -698,6 +699,78 @@ def _register_media(mcp: Any) -> None:
             agent.audit("media_status",
                         {"player": d.get("player"), "status": d.get("status")})
             return d
+
+
+def _register_apps(mcp: Any) -> None:
+    """Desktop app launcher (xdg + /proc on Linux)."""
+
+    if _expose(cap.APP_LIST_INSTALLED, "apps_list_installed"):
+        @mcp.tool(description=(
+            "List installed desktop apps from XDG ``applications`` "
+            "directories. Returns a list of {id, name, exec, icon, "
+            "no_display}. ``id`` is the .desktop filename without "
+            "extension and is what you pass to apps_launch."
+        ))
+        def apps_list_installed() -> list[dict[str, Any]]:
+            if (e := _guard("apps_list_installed", {})):
+                return [{"error": e}]
+            try:
+                d = plat.apps.list_installed()
+            except (BackendError, NotSupportedError) as exc:
+                return [{"error": str(exc)}]
+            agent.audit("apps_list_installed", {"count": len(d)})
+            return d
+
+    if _expose(cap.APP_LIST_RUNNING, "apps_list_running"):
+        @mcp.tool(description=(
+            "List running processes whose ``comm`` matches a known "
+            "app id. Returns {pid, comm, app_id?}; ``app_id`` is "
+            "absent for processes not tied to a known desktop entry."
+        ))
+        def apps_list_running() -> list[dict[str, Any]]:
+            if (e := _guard("apps_list_running", {})):
+                return [{"error": e}]
+            try:
+                d = plat.apps.list_running()
+            except (BackendError, NotSupportedError) as exc:
+                return [{"error": str(exc)}]
+            agent.audit("apps_list_running", {"count": len(d)})
+            return d
+
+    if _expose(cap.APP_LAUNCH, "apps_launch"):
+        @mcp.tool(description=(
+            "Launch an installed app by ``id`` (preferred — uses "
+            "gtk-launch) or a raw shell-style command. Returns the "
+            "new pid (0 if it couldn't be determined for a "
+            "detached gtk-launch)."
+        ))
+        def apps_launch(app_id_or_cmd: str) -> dict[str, Any]:
+            if (e := _guard("apps_launch", {"target": app_id_or_cmd})):
+                return {"error": e}
+            with _acting():
+                try:
+                    pid = plat.apps.launch(app_id_or_cmd)
+                except (BackendError, NotSupportedError) as exc:
+                    return {"error": str(exc)}
+            agent.audit("apps_launch",
+                        {"target": app_id_or_cmd, "pid": pid})
+            return {"pid": pid}
+
+    if _expose(cap.APP_KILL, "apps_kill"):
+        @mcp.tool(description=(
+            "SIGTERM a process by pid (int) or every running pid of "
+            "an installed app id (string). Raises if no match."
+        ))
+        def apps_kill(pid_or_app_id: int | str) -> str:
+            if (e := _guard("apps_kill", {"target": pid_or_app_id})):
+                return e
+            with _acting():
+                try:
+                    plat.apps.kill(pid_or_app_id)
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("apps_kill", {"target": pid_or_app_id})
+            return "killed"
 
 
 def _register_misc(mcp: Any) -> None:

@@ -55,6 +55,8 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "platform_info":     "read-only",
     "audio_get_volume":  "read-only",
     "media_status":      "read-only",
+    "apps_list_installed": "read-only",
+    "apps_list_running":   "read-only",
     # --- assist (reversible / interactive) ---
     "type_text":                 "assist",
     "press_key":                 "assist",
@@ -79,8 +81,10 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "media_play_pause":          "assist",
     "media_next":                "assist",
     "media_prev":                "assist",
+    "apps_launch":               "assist",
     # --- full (irreversible) ---
     "close_window":              "full",
+    "apps_kill":                 "full",
     # "run_shell":               "full",  # Phase E
 }
 

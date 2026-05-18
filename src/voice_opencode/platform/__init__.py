@@ -194,6 +194,9 @@ def _wire_common_linux(
     if (b := _try(playerctl_backend.PlayerctlMediaBackend,
                   "linux_audio_pipewire.playerctl")):
         out["media"] = b
+    from ..backends.linux_apps_xdg import xdg_backend
+    if (b := _try(xdg_backend.XdgAppLauncher, "linux_apps_xdg")):
+        out["apps"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):

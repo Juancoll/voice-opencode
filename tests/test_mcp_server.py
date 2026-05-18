@@ -157,3 +157,19 @@ def test_audio_media_tools_registered(monkeypatch):
                  "audio_mic_mute_toggle", "media_play_pause",
                  "media_next", "media_prev"):
         assert must in a
+
+
+def test_apps_tools_registered(monkeypatch):
+    """Phase I tools land in the right tiers."""
+    ro = _build_with(monkeypatch, "read-only")
+    assert "apps_list_installed" in ro
+    assert "apps_list_running" in ro
+    assert "apps_launch" not in ro
+    assert "apps_kill" not in ro
+
+    a = _build_with(monkeypatch, "assist")
+    assert "apps_launch" in a
+    assert "apps_kill" not in a            # kill is full-only
+
+    f = _build_with(monkeypatch, "full")
+    assert "apps_kill" in f
