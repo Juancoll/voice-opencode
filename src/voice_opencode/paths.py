@@ -40,6 +40,10 @@ STATE_FILE: Path = STATE_DIR / "state"
 SCREENSHOT_FILE: Path = STATE_DIR / "screen.png"
 AGENT_FILE: Path = STATE_DIR / "agent"          # presence = MCP agent has control
 AGENT_LOG_FILE: Path = PROJECT_ROOT / "logs" / "agent.log"
+# Cross-process lock for the F9 pipeline. Each Hyprland bind invocation
+# is its own Python process so a threading.Lock would be useless; we
+# fcntl.flock() this file instead. Kernel releases on process death.
+PIPELINE_LOCK_FILE: Path = STATE_DIR / "pipeline.lock"
 
 
 def ensure_dirs() -> None:

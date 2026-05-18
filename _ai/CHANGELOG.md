@@ -3,6 +3,58 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Pipeline lockfile + silent F9 drop
+
+- Smoke-test forensics: `logs/voice.log` showed two `paplay timed out`
+  + `piper exit code -9` events 60s apart between 17:14:22 and
+  17:15:22 with **no recording happening between them** — meaning two
+  ``stop_and_run()`` invocations had been racing and both reached
+  ``tts.speak()``. User caught this live ("se han reproducido varias
+  veces las voces"). Earlier in the same session, lines 487-495 also
+  showed five "Recording started" events in 13s caused by Hyprland's
+  key-repeat re-dispatching the press bind while F9 was held.
+- **First attempt was wrong**: I used ``threading.Lock``. That only
+  serialises within one process; F9 dispatches every press as a fresh
+  ``voice`` subprocess so the lock had no effect on the real bug. The
+  attempt was caught the next session — production log filled with
+  "TTS error: piper died" from a test that didn't mock ``log()``,
+  exposing both the wrong abstraction and the test contamination at
+  once. Reverted.
+- **Correct fix**: cross-process **timestamped lockfile** at
+  ``PIPELINE_LOCK_FILE`` (``$XDG_RUNTIME_DIR/voice-opencode/pipeline.lock``).
+  Acquire via ``os.open(O_CREAT|O_EXCL)`` — atomic at the kernel
+  level. Contents: ``"<pid> <unix_ms>\n"`` so the file is human
+  inspectable (``cat pipeline.lock``) and manually removable
+  (``rm pipeline.lock`` recovers the system). Stale recovery: on
+  contention we read the file, and if the holder PID is dead OR the
+  timestamp is older than ``_LOCK_TTL_S`` (120s — 2x the paplay
+  watchdog), we steal the lock + retry once. Release: ``unlink()``.
+- ``start_recording`` calls the lock with ``notify_on_busy=False``:
+  a held F9 (key-repeat), accidental double-tap, or true concurrent
+  press is dropped **silently** — no toast spam, just a single log
+  line ``F9 descartado: ya hay un turno en curso (grabación o
+  respuesta).`` That same message is emitted whether the duplicate
+  was caught by ``audio.is_recording()`` (fast path) or by the
+  lockfile (true race), so grepping ``logs/voice.log`` for one
+  marker covers every "ignored because busy" case. ``audio.start()``
+  itself became silent (no more ``Already recording.``) — the user-
+  facing message belongs to the caller's layer.
+- ``stop_and_run`` keeps the ``⏳ Ocupado`` toast: if you release F9
+  mid-reply and nothing happens, you deserve feedback. Different
+  semantics, deliberate.
+- ``tests/test_pipeline.py`` rewritten (21 cases): isolated lockfile
+  via ``tmp_path``, monkeypatched ``log``/``notify``/``set_state``
+  so production logs stay clean; live-holder drop, dead-pid steal
+  (using real ``os.fork``/``waitpid``), TTL-expired steal,
+  corrupted-file steal, exception release, two-thread race, fast
+  path via ``audio.is_recording``, message uniformity across both
+  guards, silent-drop assertion. Real cross-process smoke also run
+  with two ``voice rec start`` invocations back-to-back: second
+  logged ``F9 descartado…`` and emitted no toast.
+- Suite: 346 passed (+21), ruff clean, mypy clean. No new ADR — this
+  is hardening of an implicit single-runner assumption, not a new
+  policy.
+
 ## 2026-05-18 — TTS markdown sanitizer hardening
 
 - Bug surfaced live: piper was reading every Markdown delimiter

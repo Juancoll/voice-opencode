@@ -37,9 +37,14 @@ def is_recording() -> bool:
 
 
 def start() -> None:
-    """Begin recording. No-op if already recording."""
+    """Begin recording. No-op if already recording.
+
+    The caller (``pipeline.start_recording``) emits the user-facing
+    log line; this layer stays silent so the message is not
+    duplicated. We keep the guard as a defensive net in case any
+    other code path calls us directly.
+    """
     if is_recording():
-        log("Already recording.")
         return
     REC_WAV_FILE.unlink(missing_ok=True)
 
