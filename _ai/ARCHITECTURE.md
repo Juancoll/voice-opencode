@@ -11,9 +11,9 @@ voice-opencode/
 │   ├── notify.py                  # notify() — notify-send wrapper
 │   ├── config.py                  # Settings dataclass, env > json > defaults
 │   ├── state.py                   # pipeline phase + pause sentinel
-│   ├── audio.py                   # arecord start/stop/is_recording
-│   ├── stt.py                     # whisper-cli wrapper
-│   ├── tts.py                     # piper-tts + paplay; voice metadata
+│   ├── audio.py                   # shim → platform.recorder (arecord) — ADR-0023
+│   ├── stt.py                     # shim → platform.stt (whisper-cli) — ADR-0023
+│   ├── tts.py                     # voice metadata + clean_for_tts + speak() (→ platform.tts + platform.player) — ADR-0023
 │   ├── screenshot.py              # shim → platform.screen
 │   ├── desktop.py                 # shim → platform.input + platform.wm
 │   ├── opencode_client.py         # health() + Session class
@@ -47,8 +47,13 @@ voice-opencode/
 │       ├── linux_ocr_tesseract/   # tesseract TSV + word-level match (real, Phase F)
 │       ├── linux_dialog_kde/      # kdialog (real, Phase C) + libnotify (real)
 │       ├── linux_dialog_gtk/      # zenity (real, Phase C — fallback)
+│       ├── linux_audio_arecord/   # RecorderBackend (Phase A.2 / ADR-0023)
+│       ├── linux_audio_paplay/    # PlayerBackend (Phase A.3 / ADR-0023)
+│       ├── linux_logview_terminal/ # LogViewerBackend — tail -f in foot/kitty/… (Phase A.7)
+│       ├── common_piper/          # TTSBackend — Piper CLI, cross-OS (Phase A.4)
+│       ├── common_whisper_cpp/    # STTBackend — whisper-cli, cross-OS (Phase A.5)
 │       ├── macos_stub/            # placeholder for AppleScript/Quartz
-│       └── windows_stub/          # placeholder for pywin32/UIA
+│       └── windows_stub/          # placeholder for pywin32/UIA (Phase C target)
 ├── tests/                         # pytest suite (no audio/network)
 ├── icons/                         # SVG icons per state
 ├── voices/                        # Piper .onnx + .onnx.json sidecars

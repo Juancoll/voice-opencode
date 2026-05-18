@@ -3,6 +3,34 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.8: ADR-0023 captures the Phase A architectural intent
+
+- Wrote ADR-0023 "Voice pipeline as platform surfaces (Phase A)"
+  in ``_ai/DECISIONS.md`` documenting the problem (pipeline
+  modules bypassed the platform layer; ``tts.py`` chained Piper
+  to paplay through a literal shell pipe; failures raised
+  ``RuntimeError`` not ``BackendError``); the decision (four
+  new Protocols ``RecorderBackend``/``PlayerBackend``/
+  ``TTSBackend``/``STTBackend`` plus tiny ``LogViewerBackend``
+  for the tray; ``common_`` prefix on Piper and whisper backends
+  to signal cross-OS reuse without forking the file tree); the
+  five alternatives considered and rejected (one mega-Protocol;
+  Windows-only fork; pyaudio/sounddevice; libpiper bindings;
+  Piper-to-ffplay subprocess pipe); and the consequences
+  (engines and sinks independently swappable; one extra WAV
+  write per reply; rules going forward for ``backends/common_*``
+  vs ``backends/{linux,macos,windows}_*``).
+- Updated ``_ai/ARCHITECTURE.md`` tree: ``audio.py``/``stt.py``/
+  ``tts.py`` annotated as Phase A shims; new backend directories
+  ``linux_audio_arecord/``, ``linux_audio_paplay/``,
+  ``linux_logview_terminal/``, ``common_piper/``,
+  ``common_whisper_cpp/`` listed.
+- Phase A complete: 8 steps (A.1 → A.8), 8 commits, +67 tests
+  (345 → 412), zero regressions, every commit verified ruff +
+  mypy clean. Voice pipeline now sits behind the same
+  Protocol/backend layer as the rest of the app — Windows
+  (Phase C) becomes a wiring task instead of a rewrite.
+
 ## 2026-05-19 — A.7: LogViewerBackend; tray._open_logs goes through platform
 
 - Phase A.7: the tray's "Ver logs" action used to probe

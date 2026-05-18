@@ -5,6 +5,188 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0023 — Voice pipeline as platform surfaces (Phase A)
+
+Date: 2026-05-19
+
+### Context
+
+`voice-opencode` ran exclusively on Linux + Hyprland from day one.
+The `platform/` package and the `BackendError` Protocol layer
+(introduced for window-management, screen capture, clipboard,
+input, notify, dialog, audio, media, apps, shell, ocr) cleanly
+isolated *desktop integration* from the rest of the code — but
+the *voice pipeline itself* (record → STT → opencode → TTS →
+play) bypassed that abstraction entirely.
+
+The four pipeline modules had hard-coded subprocess calls baked
+into the top-level `voice_opencode.*` namespace:
+
+- `audio.py` — `subprocess.Popen(["arecord", "-D", "default", "-f",
+  "S16_LE", "-r", "16000", "-c", "1", str(out)])`,
+- `tts.py` — `subprocess.Popen("piper-tts … | paplay", shell=True)`
+  (a literal pipe between two binaries),
+- `stt.py` — `subprocess.run(["whisper-cli", "-m", model, "-l", lang,
+  "-nt", "-np", "-f", wav])`,
+- `tray.py:_open_logs` — inline `subprocess.run(["which", term])`
+  probes for `foot`/`kitty`/`alacritty`/`xterm` and an `xdg-open`
+  fallback.
+
+Three problems made this unworkable for Windows portability and
+for swapping any single component:
+
+1. `tts.py` chained Piper to paplay via a *shell pipe*. To replace
+   paplay with WASAPI on Windows you would have to rewrite `speak()`,
+   not configure a backend.
+2. Each module raised `RuntimeError` (not `BackendError`) on
+   subprocess failure, so callers had no uniform way to distinguish
+   "feature absent on this host" from "bug in our code".
+3. `pipeline.py` imported the modules directly (`from . import
+   audio, stt, tts`). Any attempt to substitute a different recorder
+   or player at runtime required monkeypatching globals.
+
+The platform layer already had the right shape for everything else
+in the app. The fix was to extend it, not to invent a new pattern.
+
+### Decision
+
+Add four new `Protocol`s in `platform/base.py` covering the voice
+pipeline plus one for the tray's log viewer:
+
+| Protocol            | Method(s)                                          | Capability constant(s)                                  |
+|---------------------|----------------------------------------------------|---------------------------------------------------------|
+| `RecorderBackend`   | `start(out)`, `stop(out)→Path?`, `is_recording()`  | `RECORDER_START`, `RECORDER_STOP`, `RECORDER_IS_RECORDING` |
+| `PlayerBackend`     | `play_wav(path, timeout_s=60)`                     | `PLAYER_PLAY_WAV`                                       |
+| `TTSBackend`        | `list_voices()`, `synthesize(text, voice, out, *, speaker_id=None)→Path` | `TTS_LIST_VOICES`, `TTS_SYNTHESIZE`     |
+| `STTBackend`        | `transcribe(wav)→str`                              | `STT_TRANSCRIBE`                                        |
+| `LogViewerBackend`  | `tail_file(path)`                                  | `LOGVIEW_TAIL_FILE`                                     |
+
+Each Protocol has a matching `Null*Backend` in `platform/null.py`
+that raises `BackendError("…feature not available")` on every method
+*except* boolean queries — `NullRecorderBackend.is_recording()`
+returns `False`, not raise, so pipeline guards keep working when no
+real recorder is wired (tests, headless CI).
+
+Move the existing logic verbatim into per-backend files:
+
+- `backends/linux_audio_arecord/recorder.py` — same arecord args,
+  same PID-file convention, same SIGINT shutdown, same 4 KB minimum
+  threshold.
+- `backends/linux_audio_paplay/player.py` — paplay with the 60 s
+  watchdog kill that already existed.
+- `backends/common_piper/tts.py` — Piper CLI, **but** synthesises
+  to a WAV file instead of streaming through a pipe. Honours
+  `PIPER_BIN` env override. Detects multi-speaker models via the
+  `.onnx.json` sidecar and adds `--speaker N` only when applicable.
+- `backends/common_whisper_cpp/stt.py` — whisper-cli, honours
+  `WHISPER_BIN`. Reads model/language from `config.settings` so
+  callers don't pass them.
+- `backends/linux_logview_terminal/logview_backend.py` — the
+  `foot > kitty > alacritty > xterm` probe + `xdg-open` fallback,
+  using `shutil.which` instead of `subprocess.run(['which', …])`.
+
+Note the deliberate `common_` prefix on the Piper and whisper
+backends instead of `linux_`. Both ship identical CLIs on Linux and
+Windows; only the binary path differs (`PIPER_BIN`/`WHISPER_BIN`).
+Putting them under `common_` documents that they will be reused as-is
+by the Windows platform wiring in Phase C without code duplication —
+the file naming itself communicates portability scope.
+
+The old modules become thin shims so consumers don't have to change:
+
+- `audio.py` (28 LOC) → `start_recording()` / `stop_recording()` /
+  `is_recording()` delegate to `_plat.recorder.*` with `REC_WAV_FILE`.
+- `tts.py` retains three domain responsibilities (voice metadata,
+  markdown cleaning, orchestration) and `speak()` now calls
+  `_plat.tts.synthesize(text, voice, tmp_wav)` then
+  `_plat.player.play_wav(tmp_wav)`. The intermediate WAV lives in
+  `STATE_DIR/tts.wav`.
+- `stt.py` (20 LOC) → `transcribe(wav)` delegates to `_plat.stt`.
+- `tray._open_logs` → 5-line wrapper around `_plat.logview.tail_file`.
+
+The TTS↔player split (WAV intermediate) is the load-bearing
+architectural choice: it lets the same Piper engine drive any
+PlayerBackend, and any TTSBackend drive paplay. Cross-platform
+parity collapses to "swap two thin backends" instead of "rewrite
+the pipeline".
+
+`paths.py` gains `runtime_dir()` / `state_dir()` / `config_dir()`
+helpers that branch on `sys.platform` (XDG on Linux,
+`%LOCALAPPDATA%`/`%APPDATA%` on Windows). Module-level constants
+stay as compatibility shims around them.
+
+### Alternatives considered
+
+1. **Leave the voice pipeline as-is and gate Windows behind a
+   second top-level entry point** (`voice_opencode_win/`). Rejected:
+   forks the codebase, duplicates the CLI/tray/MCP layers, and the
+   user wants the *same* CLI on both OSes.
+2. **One mega-Protocol `VoicePipelineBackend` instead of four small
+   ones**. Rejected: tightly couples the four subsystems exactly when
+   we want them swappable independently (e.g. swap player without
+   touching TTS).
+3. **Run Piper as a subprocess pipe even on Windows** (`piper.exe |
+   ffplay -`). Possible but adds `ffplay`/`ffmpeg` as a dependency
+   and inherits the same "no swap without rewriting `speak`" problem
+   we just fixed.
+4. **Embed libpiper/libwhisper as Python bindings**. Tempting (no
+   subprocess overhead), but neither project ships official Python
+   wheels for Linux+Windows and we don't want to maintain build
+   scripts. The CLI wrapping is good enough at ~50 ms per call.
+5. **Use `pyaudio`/`sounddevice` for recording and playback**.
+   Rejected: brings PortAudio into the dependency closure and offers
+   no real benefit over `arecord`/`paplay` on Linux. Reconsider for
+   Windows where the native equivalent is friendlier than spawning
+   PowerShell.
+
+### Consequences
+
+Positive:
+
+- `tts.speak()` is now ~10 lines that compose two backends instead
+  of 30 lines orchestrating a shell pipe. Same audible output, but
+  the engines and the sinks are independently swappable — verified
+  by live smoke: Piper → WAV → paplay on Linux today; the same Piper
+  can drive WASAPI on Windows tomorrow with zero changes to
+  `tts.speak()`.
+- The "is Windows supported?" question collapses to "wire
+  `windows_*` backends in `_wire_windows()`". Phase C is now a
+  scoped engineering task, not a research project.
+- `BackendError` is the single failure type the pipeline has to
+  handle. `pipeline.py`'s try/except blocks were already shaped for
+  it (the screen/clipboard backends raise the same type).
+- 67 source files → 71. The growth is in the `backends/` tree;
+  the surface area of `src/voice_opencode/*.py` (the modules
+  consumers import) shrank.
+- Test count went from 345 (pre-Phase A) to 412. Every new backend
+  is independently testable with mocked subprocess; the shims need
+  no tests of their own beyond the existing pipeline coverage.
+
+Negative / mitigations:
+
+- One extra WAV write per reply (~200 KB to tmpfs on Linux,
+  `%LOCALAPPDATA%` on Windows). Inconsequential at speech rates;
+  measured at <1 ms overhead on this host.
+- `tts.wav` and `rec.wav` now live side-by-side in `STATE_DIR`.
+  Documented in `STATE.md`. On crash these can leak; tmpfs cleans
+  them at logout, Windows requires explicit cleanup (deferred to
+  Phase C).
+- Backend wiring in `platform/__init__.py` grew six new imports.
+  Acceptable — the alternative was scattering the wiring across the
+  consumer modules, which is exactly what Phase A was undoing.
+
+Rules going forward:
+
+- New cross-platform pipeline components (e.g. an alternative TTS
+  engine like Coqui XTTS) live under `backends/common_*`.
+- Anything that uses OS-specific APIs (PipeWire, Core Audio, WASAPI)
+  lives under `backends/{linux,macos,windows}_*`.
+- Consumer modules in `src/voice_opencode/` may import from
+  `.platform` but never directly from `.backends` — that boundary
+  keeps the Phase A separation enforceable by static analysis.
+
+---
+
 ## ADR-0021 — `platform_info()`: structured host snapshot in one pure function
 
 Date: 2026-05-18
