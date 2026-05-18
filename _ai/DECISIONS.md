@@ -7,6 +7,62 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0016 — Capacity hot-reload via MCP respawn, not in-process signal
+
+Date: 2026-05-18
+
+### Context
+
+Phase J adds a tray menu that lets the user switch ``capacity_mode``
+on the fly (Solo lectura / Asistir / Completo). The MCP server
+filters tools at registration time (ADR-0014), so a live MCP
+process keeps the old tool set even if ``config.settings.capacity_mode``
+changes underneath it. Some mechanism is needed to make the
+switch take effect "now".
+
+### Decision
+
+The tray runs ``voice config set capacity_mode <new>`` followed by
+``voice mcp stop``. No signal-based in-process reload, no IPC.
+
+opencode spawns the MCP server lazily as a stdio child the first
+time a tool is needed in a session. After ``voice mcp stop``, the
+next tool call in opencode triggers a fresh spawn that reads the
+new config and registers the new tool set. The user sees the
+change at the next ``/tools`` listing or the next tool invocation.
+
+### Alternatives considered
+
+- **SIGHUP-style reload inside the running MCP**: would require
+  iterating ``mcp._tool_manager`` to unregister tools and rerun
+  ``_register_*`` with the new gate. FastMCP doesn't expose
+  ``unregister``; we'd have to reach into private state. Brittle
+  against future FastMCP versions and easy to leak handlers.
+- **Persist a "pending" mode and apply on next tool call**: trivial
+  to write, but tools registered at startup don't disappear at
+  call time — we'd have to re-add the call-time gate that ADR-0014
+  argued against (it leaves the tool *visible* to the model even
+  if it errors out, which is the whole problem).
+- **Run MCP as a long-lived systemd user service we restart**:
+  opencode owns the lifecycle today (stdio child); making it a
+  separate service means a new socket transport, a new ADR
+  to flip MCP transport, and breaks the "opencode launches it"
+  story. Not worth the surface area for one menu action.
+
+### Consequences
+
+- Switching capacity_mode mid-conversation kills any in-flight
+  MCP tool call (the model retries on its own — this is normal
+  MCP error handling). Acceptable: capacity changes are rare
+  and user-initiated.
+- The new mode is reflected in the tray immediately (the menu
+  reads from ``voice state`` every 1 s and the radio buttons
+  update). The model only sees it on the next MCP spawn.
+- No new IPC primitive, no extra dep. The pattern is the same
+  one used for "Detener agente (MCP)" already in the tray.
+
+---
+
 ## ADR-0015 — Apps backend: gtk-launch + manual .desktop parser; `apps_kill` is `full`
 
 Date: 2026-05-18

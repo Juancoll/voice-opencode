@@ -22,6 +22,7 @@ voice-opencode/
 │   ├── pipeline.py                # orchestration: rec → stt → opencode → tts
 │   ├── cli.py                     # dispatcher: grouped + legacy aliases
 │   ├── tray.py                    # PyQt6 QSystemTrayIcon
+│   ├── audit_viewer.py            # Qt dialog tailing agent.log (Phase J)
 │   │
 │   ├── platform/                  # ← OS/DE-agnostic abstraction layer
 │   │   ├── __init__.py            # detect(), singletons (wm/input/screen/…)

@@ -188,6 +188,39 @@ Capacity tiers: ``list`` and ``running`` are ``read-only``;
 ``launch`` is ``assist``; ``kill`` is ``full`` (SIGTERM destroys
 unsaved state in editors / terminals). See ADR-0015 for why.
 
+## Audit & capacity from the tray (Phase J)
+
+The tray's **Agente** submenu has two entries:
+
+- **Ver auditoría…** opens a modeless dialog showing the last N
+  rows of ``logs/agent.log`` (every MCP tool call). Auto-refreshes
+  every 1.5 s; spinbox controls how many lines (10–5000); manual
+  Refresh button for impatience. Read-only view — the file itself
+  is the source of truth and is also tail-able from a terminal
+  with ``voice mcp log -n 200`` or ``tail -f logs/agent.log``.
+- **Modo de capacidad** is an exclusive radio group: *Solo lectura*,
+  *Asistir (recomendado)*, *Completo (destructivo)*. Picking one
+  does two things atomically: writes ``capacity_mode`` to the
+  config file *and* runs ``voice mcp stop`` to kill any live MCP
+  server, so opencode spawns a fresh one with the new tool tier
+  on the next tool call. The radio always reflects the persisted
+  value (re-synced once per second from ``voice state``).
+
+The tray status line **agente: 🤖 activo / —** lights up while the
+MCP server holds the desktop lock (it acquires on startup and
+releases on exit). When active, F9 push-to-talk is suppressed so
+the user doesn't fight the agent.
+
+Forcing an immediate switch from the CLI:
+
+```bash
+voice config set capacity_mode read-only
+voice mcp stop          # next opencode tool call respawns MCP in read-only
+
+voice mcp log -n 100    # tail the audit log
+voice mcp status        # is anyone holding the lock right now?
+```
+
 ## Capacity modes — limit what opencode can do (Phase D)
 
 Three tiers control which MCP tools opencode sees. Switching is a

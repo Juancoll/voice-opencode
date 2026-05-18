@@ -26,6 +26,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon
@@ -115,6 +116,12 @@ class VoiceTray(QSystemTrayIcon):
 
         m.addSeparator()
         self.agent_status = self._info(m, "agente: —")
+
+        # Agente submenu (Phase J): audit viewer + capacity switcher.
+        self.agent_menu = QMenu("Agente", m)
+        self._build_agent_menu(self.agent_menu)
+        m.addMenu(self.agent_menu)
+
         self._action(m, "Detener agente (MCP)", lambda: voice_cmd("mcp", "stop"))
 
         m.addSeparator()
@@ -170,7 +177,56 @@ class VoiceTray(QSystemTrayIcon):
         menu.addAction(a)
         return a
 
-    # -- voice submenu (lazy populated, voices don't change at runtime) -----
+    # -- Agente submenu (Phase J) ------------------------------------------
+    def _build_agent_menu(self, m: QMenu) -> None:
+        # Audit viewer
+        self._action(m, "Ver auditoría…", self._open_audit_viewer)
+        # Capacity mode (exclusive group)
+        cap_menu = QMenu("Modo de capacidad", m)
+        self.capacity_group = QActionGroup(cap_menu)
+        self.capacity_group.setExclusive(True)
+        self.capacity_actions: dict[str, QAction] = {}
+        for mode, label in (
+            ("read-only", "Solo lectura"),
+            ("assist",    "Asistir (recomendado)"),
+            ("full",      "Completo (destructivo)"),
+        ):
+            act = QAction(label, cap_menu, checkable=True)
+            act.setData(mode)
+            act.triggered.connect(
+                lambda _checked, mo=mode: self._set_capacity(mo))
+            self.capacity_group.addAction(act)
+            cap_menu.addAction(act)
+            self.capacity_actions[mode] = act
+        m.addMenu(cap_menu)
+        # Keep a live ref so the viewer doesn't get GC'd while open.
+        self._audit_viewer: Any = None
+
+    def _open_audit_viewer(self) -> None:
+        # Lazy import: avoid loading QDialog machinery during tray boot.
+        from . import audit_viewer
+        if self._audit_viewer is not None:
+            try:
+                self._audit_viewer.raise_()
+                self._audit_viewer.activateWindow()
+                return
+            except RuntimeError:
+                # Underlying C++ object was deleted (user closed it).
+                self._audit_viewer = None
+        self._audit_viewer = audit_viewer.open_viewer()
+
+    def _set_capacity(self, mode: str) -> None:
+        """Persist capacity_mode and force MCP respawn so it takes effect.
+
+        The MCP server filters tools at registration time (ADR-0014),
+        so a live process keeps the old tool set until restart. We
+        stop any running MCP; opencode will spawn a fresh one with
+        the new mode on the next session.
+        """
+        voice_cmd("config", "set", "capacity_mode", mode, capture=True)
+        voice_cmd("mcp", "stop", capture=True)
+
+
     def _populate_voices(self, current: str) -> None:
         if self.voice_menu.actions():
             for act in self.voice_group.actions():
@@ -289,6 +345,7 @@ class VoiceTray(QSystemTrayIcon):
         voice   = st.get("voice", "?")
         shot_on = bool(st.get("screenshot"))
         ctx_on  = bool(st.get("context"))
+        capacity = st.get("capacity", "assist")
 
         # Effective icon: error > thinking (agent acts) > paused > phase.
         if not server:
@@ -330,6 +387,14 @@ class VoiceTray(QSystemTrayIcon):
                 action.blockSignals(False)
 
         self._populate_voices(voice)
+
+        # Reflect current capacity_mode without firing the slot.
+        for mode, act in self.capacity_actions.items():
+            want = (mode == capacity)
+            if act.isChecked() != want:
+                act.blockSignals(True)
+                act.setChecked(want)
+                act.blockSignals(False)
 
         tooltips = {
             "recording": "voice-opencode — grabando…",

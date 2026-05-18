@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase I.
+Last updated: 2026-05-18 — end of Phase J.
 
 ---
 
@@ -59,12 +59,34 @@ published on GitHub.
 | D     | Capacity modes (read-only/assist/full) filtering MCP tools | ✅ done |
 | H     | Audio / media (wpctl + playerctl backends) | ✅ done       |
 | I     | Apps (XDG launcher: list/running/launch/kill) | ✅ done    |
-| J     | Audit viewer + kill switch en tray | ⏭ next       |
-| E     | run_shell with safety rails        | pending       |
+| J     | Audit viewer + capacity kill-switch en tray | ✅ done    |
+| E     | run_shell with safety rails        | ⏭ next       |
 | F     | OCR find_text (Tesseract)          | pending       |
 | G     | Memory (Markdown plano)            | pending       |
 
-## What just shipped (Phase I, this commit)
+## What just shipped (Phase J, this commit)
+
+- `agent.audit_tail(n)`: new reader paired with the existing
+  `audit` writer. Skips malformed/non-dict JSON lines, never
+  raises, returns newest-last. Full-file read (fine for current
+  log sizes).
+- `audit_viewer.py`: new module — modeless `QDialog` +
+  `QTableWidget` (ts/tool/args/result), spinbox for N entries,
+  manual Refresh, 1.5 s polling. Imported lazily by the tray.
+- `tray.py`: new **Agente** submenu with **Ver auditoría…** and
+  **Modo de capacidad** (exclusive radio: read-only/assist/full).
+  Selecting a mode persists it and runs `voice mcp stop` so the
+  next opencode tool call spawns a fresh MCP at the new tier
+  (in-process reload rejected — see ADR-0016).
+- `cmd_state` now also returns `capacity` (additive field) so
+  the tray's radio reflects the persisted value on each poll.
+- **ADR-0016** documents the respawn-over-reload decision and
+  the alternatives considered.
+- 192 tests verde (eran 183): +9 in `test_audit.py`.
+- ruff + mypy verde (55 source files).
+- No new runtime deps.
+
+## Previously shipped (Phase I)
 
 - `backends/linux_apps_xdg/xdg_backend.py`: real XDG app launcher.
   Manual `.desktop` parser (i18n-safe — `configparser` chokes on
@@ -199,23 +221,28 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase J — Audit viewer + kill switch en tray.** Submenu
-   "Agente" en el tray con: ver `logs/agent.log` últimos N
-   (lectura tail, viewer simple), toggle capacity_mode (con
-   restart automático del MCP server porque la lista de tools
-   se filtra en registro, ADR-0014), pause/resume del agente.
-   Sin nuevo backend; toca `tray/` + `agent.py` + posiblemente
-   un viewer Qt minimal.
-2. **Phase E — run_shell con safety rails.** Tier `full`.
-   Allowlist regex de comandos, timeout estricto, captura
+1. **Phase E — run_shell con safety rails.** Tier `full`.
+   Allowlist regex de comandos (denylist por defecto + lista
+   permisiva por config), timeout estricto, captura
    stdout/stderr, audit verbose. ADR nuevo para la política
    de allowlist. El stub `ShellBackend` ya existe en
-   `platform/base.py`.
-3. **Phase F — OCR find_text (Tesseract).** Tomar
-   ``screen.capture_*`` + tesseract → encontrar texto y
+   `platform/base.py`. Nuevo backend
+   `backends/linux_shell_posix/`. CLI `voice shell run <cmd>`
+   y MCP tool `shell_run`. Importante: NUNCA llegar a
+   capacity-mode `assist` aunque sea read-only para algo —
+   el daño potencial es total.
+2. **Phase F — OCR find_text (Tesseract).** Tomar
+   `screen.capture_*` + tesseract → encontrar texto y
    devolver bounding box. Backend nuevo
-   ``backends/linux_ocr_tesseract/``. Capability
-   ``screen.find_text``. Tier ``read-only``.
+   `backends/linux_ocr_tesseract/`. Capability
+   `screen.find_text`. Tier `read-only`. Requiere `pacman -S
+   tesseract tesseract-data-eng tesseract-data-spa` (preguntar
+   al usuario antes de instalar).
+3. **Phase G — Memory (Markdown plano).** Persistir
+   conversaciones del agente en `memory/YYYY-MM-DD.md`,
+   tool MCP `memory_search` / `memory_append`. Sin DB; solo
+   ripgrep o fts5 si crece. Tier read-only para search,
+   assist para append.
 
 ## Critical context to keep in your head
 
@@ -224,8 +251,8 @@ published on GitHub.
 - Repo público: <https://github.com/Juancoll/voice-opencode>, branch
   `main`. Commits previos: `40a41db`, `9d231ac`, `69e82c2`, `63f0755`,
   `f95ad2f`, `30fc0cd` (Phase B), `6c53357` (Phase C), `f38c0dd`
-  (Phase D), `f0de0b9` (Phase H), + el commit Phase I que estás
-  creando ahora.
+  (Phase D), `f0de0b9` (Phase H), `f4f534d` (Phase I), + el
+  commit Phase J que estás creando ahora.
 - Wrapper `./voice` exporta `PYTHONPATH=src` antes de
   `python -m voice_opencode`. Activa el venv local.
 - ydotool socket en `/run/user/1000/.ydotool_socket`.
@@ -284,14 +311,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 183 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 192 passing
 venv/bin/ruff check src tests                # all clean
 venv/bin/mypy src/voice_opencode             # no issues, 51 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase J.
+If any of those fail, fix them **before** starting Phase E.
 
 ## Files to read first when resuming
 

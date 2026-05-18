@@ -97,3 +97,32 @@ def audit(tool: str, args: dict[str, Any], result: str = "ok") -> None:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def audit_tail(n: int = 50) -> list[dict[str, Any]]:
+    """Return the last ``n`` audit entries, newest last. Malformed lines skipped.
+
+    Never raises; returns ``[]`` on any I/O or parse failure of the
+    whole file. Individual unparseable lines are dropped silently.
+    """
+    if n <= 0 or not AGENT_LOG_FILE.exists():
+        return []
+    try:
+        # Audit logs are append-only JSONL; a full read is fine for
+        # the viewer's expected size (thousands of lines, not millions).
+        lines = AGENT_LOG_FILE.read_text(encoding="utf-8",
+                                         errors="replace").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for raw in lines[-n:]:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                out.append(obj)
+        except json.JSONDecodeError:
+            continue
+    return out

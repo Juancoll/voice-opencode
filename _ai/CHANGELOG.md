@@ -3,6 +3,50 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Phase J: audit viewer + capacity kill-switch in tray
+
+- New ``audit_tail(n)`` reader on ``agent`` (alongside ``audit``).
+  Returns the last ``n`` parsed JSON-line entries, newest last;
+  silently skips malformed/non-dict lines; never raises. Lazy
+  full-file read — fine for our log sizes (thousands of lines,
+  not millions). Future: switch to seek-from-end if logs grow.
+- New ``audit_viewer.py`` module: a modeless ``QDialog`` with a
+  ``QTableWidget`` (ts/tool/args/result columns), a spinbox for
+  line count, manual Refresh, and a 1.5 s polling timer. Imported
+  lazily from the tray to keep tray boot fast (PyQt6 QTableWidget
+  not loaded until the user actually opens the viewer).
+- ``tray.py``: new "Agente" submenu with **Ver auditoría…** (opens
+  the viewer; keeps a live ref so it isn't GC'd; raises an
+  existing window if reopened) and **Modo de capacidad** (exclusive
+  radio group: Solo lectura / Asistir / Completo). Selecting a
+  mode runs ``voice config set capacity_mode <x>`` then
+  ``voice mcp stop`` so the next opencode tool call spawns a
+  fresh MCP with the new tier (ADR-0016). The radio state is
+  re-synced on every 1 s refresh from ``voice state``.
+- ``cmd_state``: now also returns ``capacity`` so the tray can
+  reflect the live setting without parsing config.toml directly.
+  Backward-compatible — additive field.
+- New **ADR-0016** explaining why we restart the MCP server
+  instead of in-process reload (FastMCP has no unregister; the
+  call-time gate ADR-0014 rejected reappears; respawn is the
+  same primitive already used by "Detener agente (MCP)").
+- 192 tests verde (eran 183): +9 in ``tests/test_audit.py``
+  covering missing log, n≤0 guard, ordering (newest last),
+  tail limit, malformed-line skip, non-dict skip, unicode
+  round-trip, write-then-read round-trip, IOError on
+  read_text. No tray test (Qt-modal UI; not worth a fake
+  X display in CI).
+- Smoke live: ``voice state`` now reports ``capacity: assist``;
+  ``voice mcp log -n 3`` confirmed real entries from prior
+  Phase H smoke (``press_key``, ``list_monitors``); the
+  ``audit_viewer`` module imports cleanly (full Qt smoke not
+  possible from this shell — needs a logged-in Wayland
+  session, the user runs ``voice tray`` for that).
+- ruff + mypy verde (55 source files).
+- No new runtime deps — PyQt6 was already present for the tray.
+
+---
+
 ## 2026-05-18 — Phase I: apps surface (xdg launcher, MCP, CLI)
 
 - New backend ``backends/linux_apps_xdg/xdg_backend.py`` replacing

@@ -196,6 +196,7 @@ def cmd_state(_: list[str]) -> int:
         "speaker_id": config.settings.speaker_id,
         "screenshot": config.settings.screenshot,
         "context":    config.settings.keep_context,
+        "capacity":   config.settings.capacity_mode,
     }
     print(json.dumps(out, ensure_ascii=False))
     return 0
