@@ -3,6 +3,64 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Tanda 2: memory delete/edit + memory viewer + v0.1.0
+
+- Released **v0.1.0** to GitHub
+  (https://github.com/Juancoll/voice-opencode/releases/tag/v0.1.0).
+  CI run ``26033407692`` green on Python 3.11/3.12/3.13.
+- Fixed the CI-only failure that blocked the release: the two
+  ``test_known_app_uses_gtk_launch`` and
+  ``test_known_app_falls_back_when_gtk_launch_fails`` tests left
+  ``shutil.which("gtk-launch")`` unpatched. On the dev host
+  ``gtk-launch`` is installed so the branch ran; on the GitHub
+  runner ``which`` returned ``None`` and the test silently went
+  down the ``_spawn`` path, returning a real pid instead of the
+  mocked 12345. Patched ``shutil.which`` inside the test ``with``
+  blocks (commit ``1bbe837``).
+- Bumped ``pyproject.toml`` version 0.3.0 → 0.1.0 to match the
+  public tag (decision: align pyproject with what users see on
+  GitHub now that we're publishing real releases).
+- Added ``memory.delete(ts) -> MemoryEntry`` and
+  ``memory.edit(ts, new_text) -> MemoryEntry``. Identification by
+  ISO timestamp (the same string already returned by every read
+  tool); atomic rewrite via tempfile + ``os.replace``; empty day
+  files are unlinked so ``list_days()`` stays honest. ``edit``
+  preserves ts + tags and reuses ``_BAD_BODY_RE`` from ``append``
+  so the validation rules can't drift. See ADR-0020.
+- 11 new tests in ``tests/test_memory.py`` (``TestDelete`` +
+  ``TestEdit``) covering: single-entry removal keeping siblings,
+  empty-file cleanup, missing entry / missing file / malformed ts
+  errors, body preservation of ts+tags on edit, empty-body and
+  ``## ``-in-body rejection on edit. Suite is now 294 tests.
+- Exposed both as MCP tools (``memory_delete``, ``memory_edit``)
+  in ``mcp_server._register_memory``. Both audited via
+  ``agent.audit`` even on rejection; both return ``{"error": str}``
+  shape on ``ValueError`` so the model can self-correct.
+- ``capacity.TIER_BY_TOOL`` adds both as ``"full"``. New tool
+  counts: read-only **20**, assist **45**, full **50** (was 48).
+- ``cli.cmd_memory`` adds ``delete`` and ``edit`` subcommands.
+  Timestamp passes as two tokens (``YYYY-MM-DD HH:MM:SS``) to keep
+  argv parsing trivial. Docstring updated.
+- New module ``memory_viewer.py``: PyQt6 ``QDialog`` mirroring
+  ``audit_viewer`` (count spinbox + Refrescar button + 2 s
+  auto-poll + monospace table + status bar). Adds a client-side
+  substring filter (``QLineEdit``) that matches against body and
+  tags simultaneously. Read-only by design — see ADR-0020 for the
+  capability-asymmetry rationale.
+- ``tray.py`` exposes "Ver memoria…" under the Agente submenu and
+  caches the dialog ref alongside the existing audit viewer, with
+  the same lazy import + ``RuntimeError``-on-C++-gone fallback.
+
+## 2026-05-18 — Tanda 1: CI + README rewrite + v0.1.0 prep
+
+- New ``.github/workflows/ci.yml``: pytest + ruff + mypy on
+  ``ubuntu-latest`` × Python 3.11/3.12/3.13. PyQt6 wheels are
+  self-contained on Linux so no system Qt deps; tests never
+  build a ``QApplication``. README gets a CI badge.
+- README rewritten for humans: quickstart, configuration table,
+  48-tool overview by tier, phase table, troubleshooting
+  pointers. Replaces the AI-agent-oriented stub.
+
 ## 2026-05-18 — Phase G: agent memory (plain Markdown)
 
 - New ``memory.py`` module — stdlib-only, no ``platform/``

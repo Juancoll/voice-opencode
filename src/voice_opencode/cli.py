@@ -784,6 +784,8 @@ def cmd_memory(args: list[str]) -> int:
     voice memory search <query...> [--limit N]   — substring search, newest first
     voice memory recent [N]                      — last N entries (default 10)
     voice memory days                            — list days that have entries
+    voice memory delete <ts>                     — remove an entry (ts = 'YYYY-MM-DD HH:MM:SS')
+    voice memory edit <ts> <new text...>         — replace an entry's body
     """
     if not args:
         _eprint(cmd_memory.__doc__)
@@ -865,6 +867,37 @@ def cmd_memory(args: list[str]) -> int:
     if sub == "days":
         for d in mem.list_days():
             print(d)
+        return 0
+
+    if sub == "delete":
+        if len(rest) < 2:
+            _eprint("Usage: voice memory delete <YYYY-MM-DD> <HH:MM:SS>")
+            _eprint("       (the timestamp is two whitespace-separated tokens)")
+            return 1
+        ts = f"{rest[0]} {rest[1]}"
+        try:
+            entry = mem.delete(ts)
+        except ValueError as e:
+            _eprint(f"error: {e}")
+            return 1
+        print(f"deleted  {entry.file.name}  {entry.ts:%H:%M:%S}  "
+              f"{len(entry.body)} chars")
+        return 0
+
+    if sub == "edit":
+        if len(rest) < 3:
+            _eprint("Usage: voice memory edit <YYYY-MM-DD> <HH:MM:SS> "
+                    "<new text...>")
+            return 1
+        ts = f"{rest[0]} {rest[1]}"
+        new_text = " ".join(rest[2:])
+        try:
+            entry = mem.edit(ts, new_text)
+        except ValueError as e:
+            _eprint(f"error: {e}")
+            return 1
+        print(f"edited   {entry.file.name}  {entry.ts:%H:%M:%S}  "
+              f"{len(entry.body)} chars")
         return 0
 
     _eprint(cmd_memory.__doc__)

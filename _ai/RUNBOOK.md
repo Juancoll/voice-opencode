@@ -288,14 +288,18 @@ voice memory append "fixed the audio bug" --tag audio --tag bug
 voice memory search audio                     # newest first
 voice memory recent 10                        # last 10 entries
 voice memory days                             # list days that have notes
+voice memory delete 2026-05-18 09:00:00       # remove one entry (ts as two tokens)
+voice memory edit   2026-05-18 09:00:00 new body text…
 ```
 
-Four MCP tools:
+Six MCP tools:
 
 - `memory_search(query, limit=20)` — read-only
 - `memory_recent(n=10)` — read-only
 - `memory_list_days()` — read-only
 - `memory_append(text, tags?)` — assist tier (writes to disk)
+- `memory_delete(ts)` — **full** tier (destructive, ADR-0020)
+- `memory_edit(ts, new_text)` — **full** tier (destructive, ADR-0020)
 
 Rules the writer enforces (to keep the parser trivial):
 
@@ -304,12 +308,16 @@ Rules the writer enforces (to keep the parser trivial):
 - no body line may start with `## ` (would split the entry on
   next read — indent it or use `###` instead)
 
+`delete` removes the day file too if it becomes empty. `edit`
+preserves ts and tags — to change those, delete and re-append.
+
 The `memory/` directory is gitignored; each user's memory is
-local.
+local. The tray's **Agente → Ver memoria…** opens a read-only
+table viewer with substring filter (Tanda 2).
 
 ## Audit & capacity from the tray (Phase J)
 
-The tray's **Agente** submenu has two entries:
+The tray's **Agente** submenu has three entries:
 
 - **Ver auditoría…** opens a modeless dialog showing the last N
   rows of ``logs/agent.log`` (every MCP tool call). Auto-refreshes
@@ -317,6 +325,10 @@ The tray's **Agente** submenu has two entries:
   Refresh button for impatience. Read-only view — the file itself
   is the source of truth and is also tail-able from a terminal
   with ``voice mcp log -n 200`` or ``tail -f logs/agent.log``.
+- **Ver memoria…** opens a similar dialog over the memory
+  ``.md`` files. Substring filter matches against body and tags;
+  2 s auto-refresh; read-only by design (ADR-0020 — mutation
+  belongs to the agent, not to a tray click).
 - **Modo de capacidad** is an exclusive radio group: *Solo lectura*,
   *Asistir (recomendado)*, *Completo (destructivo)*. Picking one
   does two things atomically: writes ``capacity_mode`` to the

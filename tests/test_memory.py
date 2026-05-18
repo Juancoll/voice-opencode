@@ -239,3 +239,85 @@ class TestListDays:
 
     def test_no_files(self) -> None:
         assert mem.list_days() == []
+
+
+# ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
+class TestDelete:
+    def test_removes_single_entry_keeps_others(self, tmp_path: Path) -> None:
+        mem.append("first",  when=datetime(2026, 5, 18, 9, 0, 0))
+        mem.append("second", when=datetime(2026, 5, 18, 10, 0, 0))
+        mem.append("third",  when=datetime(2026, 5, 18, 11, 0, 0))
+
+        removed = mem.delete("2026-05-18 10:00:00")
+        assert removed.body == "second"
+
+        # File still exists with first + third only.
+        rest = [e.body for e in mem.recent(10)]
+        assert rest == ["third", "first"]
+        assert (tmp_path / "2026-05-18.md").exists()
+
+    def test_deletes_empty_file_when_last_entry_removed(
+        self, tmp_path: Path,
+    ) -> None:
+        mem.append("only one", when=datetime(2026, 5, 18, 9, 0, 0))
+        mem.delete("2026-05-18 09:00:00")
+        assert not (tmp_path / "2026-05-18.md").exists()
+        assert mem.list_days() == []
+
+    def test_missing_entry_raises(self) -> None:
+        mem.append("x", when=datetime(2026, 5, 18, 9, 0, 0))
+        with pytest.raises(ValueError, match="no entry"):
+            mem.delete("2026-05-18 23:59:59")
+
+    def test_missing_file_raises(self) -> None:
+        with pytest.raises(ValueError, match="no file"):
+            mem.delete("2026-05-18 09:00:00")
+
+    def test_malformed_ts_raises(self) -> None:
+        with pytest.raises(ValueError):
+            mem.delete("yesterday")
+
+
+# ---------------------------------------------------------------------------
+# edit
+# ---------------------------------------------------------------------------
+class TestEdit:
+    def test_replaces_body_preserving_ts_and_tags(self) -> None:
+        mem.append("old body", tags=("note", "draft"),
+                   when=datetime(2026, 5, 18, 9, 0, 0))
+        updated = mem.edit("2026-05-18 09:00:00", "new body")
+        assert updated.body == "new body"
+        assert updated.tags == ("note", "draft")
+        assert updated.ts == datetime(2026, 5, 18, 9, 0, 0)
+        # Round-trip via recent() to confirm it persisted.
+        e = mem.recent(1)[0]
+        assert e.body == "new body"
+        assert e.tags == ("note", "draft")
+
+    def test_other_entries_unchanged(self) -> None:
+        mem.append("alpha", when=datetime(2026, 5, 18, 9, 0, 0))
+        mem.append("beta",  when=datetime(2026, 5, 18, 10, 0, 0))
+        mem.edit("2026-05-18 09:00:00", "ALPHA")
+        bodies = [e.body for e in mem.recent(10)]
+        assert bodies == ["beta", "ALPHA"]
+
+    def test_empty_body_raises(self) -> None:
+        mem.append("x", when=datetime(2026, 5, 18, 9, 0, 0))
+        with pytest.raises(ValueError, match="empty"):
+            mem.edit("2026-05-18 09:00:00", "   \n  ")
+
+    def test_header_in_body_raises(self) -> None:
+        mem.append("x", when=datetime(2026, 5, 18, 9, 0, 0))
+        with pytest.raises(ValueError, match="## "):
+            mem.edit("2026-05-18 09:00:00", "before\n## fake header\nafter")
+
+    def test_missing_entry_raises(self) -> None:
+        mem.append("x", when=datetime(2026, 5, 18, 9, 0, 0))
+        with pytest.raises(ValueError, match="no entry"):
+            mem.edit("2026-05-18 23:59:59", "whatever")
+
+    def test_missing_file_raises(self) -> None:
+        with pytest.raises(ValueError, match="no file"):
+            mem.edit("2026-05-18 09:00:00", "whatever")

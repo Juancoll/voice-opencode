@@ -92,6 +92,8 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "close_window":              "full",
     "apps_kill":                 "full",
     "shell_run":                 "full",
+    "memory_delete":             "full",
+    "memory_edit":               "full",
 }
 
 

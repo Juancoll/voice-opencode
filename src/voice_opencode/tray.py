@@ -181,6 +181,8 @@ class VoiceTray(QSystemTrayIcon):
     def _build_agent_menu(self, m: QMenu) -> None:
         # Audit viewer
         self._action(m, "Ver auditoría…", self._open_audit_viewer)
+        # Memory viewer (Tanda 2)
+        self._action(m, "Ver memoria…", self._open_memory_viewer)
         # Capacity mode (exclusive group)
         cap_menu = QMenu("Modo de capacidad", m)
         self.capacity_group = QActionGroup(cap_menu)
@@ -201,6 +203,7 @@ class VoiceTray(QSystemTrayIcon):
         m.addMenu(cap_menu)
         # Keep a live ref so the viewer doesn't get GC'd while open.
         self._audit_viewer: Any = None
+        self._memory_viewer: Any = None
 
     def _open_audit_viewer(self) -> None:
         # Lazy import: avoid loading QDialog machinery during tray boot.
@@ -214,6 +217,18 @@ class VoiceTray(QSystemTrayIcon):
                 # Underlying C++ object was deleted (user closed it).
                 self._audit_viewer = None
         self._audit_viewer = audit_viewer.open_viewer()
+
+    def _open_memory_viewer(self) -> None:
+        # Lazy import: heavy table widget; only pay the cost on demand.
+        from . import memory_viewer
+        if self._memory_viewer is not None:
+            try:
+                self._memory_viewer.raise_()
+                self._memory_viewer.activateWindow()
+                return
+            except RuntimeError:
+                self._memory_viewer = None
+        self._memory_viewer = memory_viewer.open_viewer()
 
     def _set_capacity(self, mode: str) -> None:
         """Persist capacity_mode and force MCP respawn so it takes effect.

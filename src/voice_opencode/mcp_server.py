@@ -995,6 +995,51 @@ def _register_memory(mcp: Any) -> None:
             })
             return _entry_to_dict(entry)
 
+    if capacity.allows("memory_delete"):
+        @mcp.tool(description=(
+            "Delete a memory entry by its ISO timestamp (the 'ts' field "
+            "returned by memory_append / memory_search / memory_recent, "
+            "format 'YYYY-MM-DD HH:MM:SS'). Returns the deleted entry. "
+            "If the day file becomes empty it is removed. Destructive: "
+            "only available in the full capacity tier."
+        ))
+        def memory_delete(ts: str) -> dict[str, Any]:
+            try:
+                entry = mem.delete(ts)
+            except ValueError as e:
+                agent.audit("memory_delete",
+                            {"ts": ts, "denied": True}, str(e))
+                return {"error": str(e)}
+            agent.audit("memory_delete", {
+                "ts":   entry.ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "tags": list(entry.tags),
+                "file": entry.file.name,
+            })
+            return _entry_to_dict(entry)
+
+    if capacity.allows("memory_edit"):
+        @mcp.tool(description=(
+            "Replace the body of an existing memory entry. Identifies the "
+            "entry by its ISO timestamp ('YYYY-MM-DD HH:MM:SS'). The ts "
+            "and tags are preserved; only the body changes. Same body "
+            "rules as memory_append (non-empty, no '## ' header lines). "
+            "Destructive: only available in the full capacity tier."
+        ))
+        def memory_edit(ts: str, new_text: str) -> dict[str, Any]:
+            try:
+                entry = mem.edit(ts, new_text)
+            except ValueError as e:
+                agent.audit("memory_edit",
+                            {"ts": ts, "denied": True}, str(e))
+                return {"error": str(e)}
+            agent.audit("memory_edit", {
+                "ts":    entry.ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "tags":  list(entry.tags),
+                "chars": len(entry.body),
+                "file":  entry.file.name,
+            })
+            return _entry_to_dict(entry)
+
 
 def _register_misc(mcp: Any) -> None:
     if capacity.allows("sleep_ms"):

@@ -5,7 +5,88 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
-## ADR-0019 — Agent memory: plain Markdown, one file per day, stdlib search
+## ADR-0020 — Memory mutation: `delete(ts)` + `edit(ts, body)` gated to `full`
+
+Date: 2026-05-18
+
+### Context
+
+Phase G (ADR-0019) shipped append-only memory: agents could write and
+read, never modify. In practice the agent occasionally records wrong
+information (misheard date, transient context that aged out, duplicate
+of a previous note). With no mutation path the user has two bad
+options: ignore the noise (search results get noisier over time) or
+hand-edit `.md` files (fine for humans, invisible to the agent's
+own audit trail). Both undermine memory as a feature.
+
+### Decision
+
+Add two operations to `voice_opencode.memory`:
+
+- `delete(ts) -> MemoryEntry` — remove the entry identified by its
+  ISO timestamp (`YYYY-MM-DD HH:MM:SS`).
+- `edit(ts, new_text) -> MemoryEntry` — replace **only the body** of
+  an existing entry. The `ts` and `tags` are preserved.
+
+Both surface as MCP tools (`memory_delete`, `memory_edit`) and CLI
+subcommands (`voice memory delete`, `voice memory edit`). Both are
+classified in `TIER_BY_TOOL` as `"full"` — they don't appear in
+`assist` or `read-only` mode.
+
+Identification is by ISO timestamp because:
+
+- It's already returned by every read tool (`recent`, `search`,
+  `append`), so the agent has it in context.
+- It's unique within a day file (we write `datetime.now()` at
+  second resolution; the chance of two `append` calls in the same
+  second is real but the loud failure is fine — we error).
+- It avoids inventing an opaque ID (hash, UUID) that the agent
+  would have to remember to look up.
+
+Persistence uses an atomic rewrite: parse the day file in full,
+mutate the entry list in memory, serialize the result to a sibling
+tempfile (`.YYYY-MM-DD.md.XXXX.tmp`), `os.replace()`. A crash
+mid-write leaves the original file untouched. If the file becomes
+empty (we deleted its last entry), it is removed entirely so
+`list_days()` stays honest.
+
+### Alternatives
+
+- **Edit ts/tags too.** Rejected: lets the agent retroactively
+  rewrite its own timeline, which destroys the audit value of the
+  per-entry timestamp. If you need a different ts or tag, delete +
+  re-append.
+- **Tombstone instead of physical delete.** Considered (`status:
+  deleted` field). Rejected because the whole point of delete is
+  "this should stop showing up in search"; we'd then need to teach
+  every reader to filter, doubling the surface area. The audit log
+  already records the deletion as an event — that's the immutable
+  trace.
+- **In-place file edit (no tempfile).** Simpler but unsafe: a Ctrl-C
+  or process kill mid-write would leave a half-written `.md` that
+  the next `_parse_file` would silently truncate at the bad line.
+  Tempfile + `os.replace()` is one extra syscall for crash safety;
+  cheap.
+- **Soft-tier (assist).** Rejected: delete is irreversible (we don't
+  trash, we unlink). The capacity tiering rule (ADR-0014) is "if
+  the worst-case outcome of a misfire is data loss the user has to
+  manually recover from, it's full". This qualifies.
+
+### Consequences
+
+- Tool counts: read-only 20, assist 45, full **50** (was 48).
+- Memory mutations are auditable: every call goes through
+  `agent.audit("memory_delete", …)` / `"memory_edit"`, so even after
+  the entry is gone the log preserves what changed and when.
+- The tray's memory viewer (also new in Tanda 2) stays **read-only**
+  — surfacing destructive buttons there would create a confusing
+  asymmetry where the user could mutate from a click while a
+  `read-only` or `assist` agent can't.
+- `append`'s "no `## ` at start of line" body rule is reused by
+  `edit` (same `_BAD_BODY_RE`), so the validation stays in one
+  place.
+
+
 
 Date: 2026-05-18
 

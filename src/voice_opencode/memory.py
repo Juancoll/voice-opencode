@@ -26,7 +26,9 @@ The module is dependency-free (stdlib only) and never imports from
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -254,3 +256,115 @@ def list_days() -> list[str]:
     ("what days do I have notes for?") without slurping bodies.
     """
     return [p.stem for p in _iter_files(newest_first=True)]
+
+
+# ---------------------------------------------------------------------------
+# delete / edit (destructive — Phase G+1)
+# ---------------------------------------------------------------------------
+def _parse_ts(ts: str) -> datetime:
+    """Strict ``YYYY-MM-DD HH:MM:SS`` parser. Raises ``ValueError`` on miss."""
+    return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+
+
+def _rewrite_file(path: Path, entries: list[MemoryEntry]) -> None:
+    """Atomically rewrite ``path`` so it contains exactly ``entries``.
+
+    Empty list → file is deleted (we don't keep empty day files around;
+    they'd pollute ``list_days``). Write goes via a sibling tempfile
+    + ``os.replace`` so a crash mid-write can't leave a half-written
+    memory file behind.
+    """
+    if not entries:
+        path.unlink(missing_ok=True)
+        return
+
+    parts: list[str] = []
+    for e in entries:
+        parts.append(f"\n{_format_header(e.ts, e.tags)}\n")
+        if e.body:
+            parts.append(f"{e.body}\n")
+    new_text = "".join(parts)
+
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp",
+                               dir=str(path.parent))
+    try:
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(new_text)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def delete(ts: str) -> MemoryEntry:
+    """Remove the entry identified by its ISO timestamp.
+
+    ``ts`` is ``"YYYY-MM-DD HH:MM:SS"`` (exactly what ``append`` /
+    ``search`` return). The lookup is unique within a day; we resolve
+    the file from the date portion of the timestamp.
+
+    Returns the deleted entry. Raises ``ValueError`` on malformed
+    timestamp or when no entry matches. If the file becomes empty
+    after deletion it is removed entirely (keeps ``list_days`` honest).
+    """
+    target = _parse_ts(ts)
+    path = _file_for(target)
+    if not path.exists():
+        raise ValueError(f"memory.delete: no file for {target:%Y-%m-%d}")
+
+    entries = _parse_file(path)
+    keep: list[MemoryEntry] = []
+    removed: MemoryEntry | None = None
+    for e in entries:
+        if e.ts == target and removed is None:
+            removed = e
+        else:
+            keep.append(e)
+
+    if removed is None:
+        raise ValueError(f"memory.delete: no entry at {ts}")
+
+    _rewrite_file(path, keep)
+    return removed
+
+
+def edit(ts: str, new_text: str) -> MemoryEntry:
+    """Replace the body of the entry at ``ts`` while keeping ts + tags.
+
+    Same identification + validation rules as ``append`` apply to the
+    new body. The original entry's ``ts`` and ``tags`` are preserved
+    so callers can't accidentally re-order their notes or invent new
+    tag taxonomies via an edit.
+    """
+    body = new_text.strip()
+    if not body:
+        raise ValueError("memory.edit: text is empty after strip()")
+    if _BAD_BODY_RE.search(body):
+        raise ValueError(
+            "memory.edit: body contains a line starting with '## ' which "
+            "would split the entry; indent it or use a different prefix"
+        )
+
+    target = _parse_ts(ts)
+    path = _file_for(target)
+    if not path.exists():
+        raise ValueError(f"memory.edit: no file for {target:%Y-%m-%d}")
+
+    entries = _parse_file(path)
+    updated: MemoryEntry | None = None
+    out: list[MemoryEntry] = []
+    for e in entries:
+        if e.ts == target and updated is None:
+            updated = MemoryEntry(ts=e.ts, tags=e.tags, body=body, file=e.file)
+            out.append(updated)
+        else:
+            out.append(e)
+
+    if updated is None:
+        raise ValueError(f"memory.edit: no entry at {ts}")
+
+    _rewrite_file(path, out)
+    return updated

@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase G.
+Last updated: 2026-05-18 — end of Tanda 2 (memory mutations + memory viewer; v0.1.0 released).
 
 ---
 
@@ -63,9 +63,44 @@ published on GitHub.
 | E     | run_shell with safety rails        | ✅ done       |
 | F     | OCR find_text (Tesseract)          | ✅ done       |
 | G     | Memory (Markdown plano)            | ✅ done       |
+| G+1   | Memory delete/edit + viewer + v0.1.0 release (Tanda 1+2) | ✅ done |
 | K     | OS-agnostic detect_*: replace UA strings with ``platform_info`` | ⏭ next (optional) |
 
-## What just shipped (Phase G, this commit)
+## What just shipped (Tanda 1 + Tanda 2, this commit)
+
+- **v0.1.0 released** on GitHub
+  (https://github.com/Juancoll/voice-opencode/releases/tag/v0.1.0).
+  CI green on Python 3.11/3.12/3.13. ``pyproject.toml`` version
+  bumped to ``0.1.0`` to match the public tag.
+- **CI workflow** (``.github/workflows/ci.yml``): pytest + ruff
+  + mypy on ``ubuntu-latest`` × py3.11/3.12/3.13. Fixed two
+  ``test_known_app_uses_gtk_launch`` / ``…falls_back_when_…``
+  cases that assumed ``gtk-launch`` was on the runner PATH —
+  now patch ``shutil.which`` explicitly so the test exercises
+  the intended branch on hosts without the binary.
+- **README rewrite** for humans: CI badge, quickstart, 48-tool
+  overview by tier, configuration table, phase table.
+- **Memory mutations** (``memory.delete(ts)`` /
+  ``memory.edit(ts, new_text)``): atomic rewrite via tempfile
+  + ``os.replace``; empty day files are unlinked; ``edit``
+  preserves ts+tags and reuses ``_BAD_BODY_RE``. New ADR-0020.
+- **MCP tools** ``memory_delete`` and ``memory_edit`` in
+  ``full`` tier (destructive). Audited even on rejection.
+- **CLI** ``voice memory delete <YYYY-MM-DD> <HH:MM:SS>`` and
+  ``voice memory edit <YYYY-MM-DD> <HH:MM:SS> <new text…>``.
+- **memory_viewer.py** — new PyQt6 dialog mirroring
+  ``audit_viewer`` (table + 2 s auto-poll + count spinbox +
+  Refresh button) plus a client-side substring filter
+  (matches body **and** tags). Read-only by design.
+- **Tray**: new "Ver memoria…" entry under the Agente submenu,
+  with the same lazy import + GC-safe ref pattern as the audit
+  viewer.
+- **Tests**: +11 in ``tests/test_memory.py`` (``TestDelete`` +
+  ``TestEdit``). Suite is 294 passing, ruff + mypy clean.
+- **Tool counts**: read-only **20**, assist **45**, full **50**
+  (+2 vs Phase G end).
+
+## What previously shipped (Phase G)
 
 - New ``memory.py`` — stdlib-only, no ``platform/`` imports.
   Public API: ``append(text, tags=(), when=None)``,
@@ -90,10 +125,9 @@ published on GitHub.
   only capacity tier filters. Audit records ``{query,
   matches}`` / ``{ts, tags, chars, file}`` — never the body
   contents.
-- ``capacity.py``: tier mapping added. Live counts: read-only
-  20 (eran 17), assist 45 (eran 41), full 48 (eran 44).
+- ``capacity.py``: tier mapping added.
 - ``.gitignore``: ``memory/`` added.
-- New **ADR-0019** — plain Markdown, one file per day,
+- **ADR-0019** — plain Markdown, one file per day,
   stdlib search. Alternatives rejected: JSON Lines, YAML
   frontmatter, SQLite FTS5, ripgrep subprocess, one big
   ``MEMORY.md``, one file per topic.
