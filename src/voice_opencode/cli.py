@@ -550,6 +550,77 @@ def cmd_dialog(args: list[str]) -> int:
     return 0
 
 
+# ---- audio subgroup ---------------------------------------------------------
+def cmd_audio(args: list[str]) -> int:
+    """
+    voice audio get               — print volume (0.00-1.00)
+    voice audio set <level>       — set volume (clamped to 0.0-1.0)
+    voice audio mute              — toggle output mute, prints new state
+    voice audio mic-mute          — toggle microphone mute, prints new state
+    """
+    if not args:
+        _eprint(cmd_audio.__doc__)
+        return 1
+    sub, rest = args[0], args[1:]
+    try:
+        if sub == "get":
+            print(f"{plat.audio.volume_get():.2f}")
+        elif sub == "set":
+            if not rest:
+                _eprint("Usage: voice audio set <level>")
+                return 1
+            try:
+                level = float(rest[0])
+            except ValueError:
+                _eprint(f"invalid level: {rest[0]!r}")
+                return 1
+            plat.audio.volume_set(level)
+        elif sub == "mute":
+            muted = plat.audio.mute_toggle()
+            print("muted" if muted else "unmuted")
+        elif sub == "mic-mute":
+            muted = plat.audio.mic_mute_toggle()
+            print("muted" if muted else "unmuted")
+        else:
+            _eprint(cmd_audio.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
+# ---- media subgroup ---------------------------------------------------------
+def cmd_media(args: list[str]) -> int:
+    """
+    voice media play              — toggle play/pause on the active player
+    voice media pause             — alias of 'play' (single MPRIS toggle)
+    voice media next              — skip to next track
+    voice media prev              — back to previous track
+    voice media status            — print player/status/title/artist as JSON
+    """
+    if not args:
+        _eprint(cmd_media.__doc__)
+        return 1
+    sub = args[0]
+    try:
+        if sub in ("play", "pause", "toggle"):
+            plat.media.play_pause()
+        elif sub == "next":
+            plat.media.next()
+        elif sub == "prev":
+            plat.media.prev()
+        elif sub == "status":
+            print(json.dumps(plat.media.status(), indent=2, ensure_ascii=False))
+        else:
+            _eprint(cmd_media.__doc__)
+            return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+    return 0
+
+
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
@@ -595,6 +666,8 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "workspaces": cmd_workspaces,
     "clipboard":  cmd_clipboard,
     "dialog":     cmd_dialog,
+    "audio":      cmd_audio,
+    "media":      cmd_media,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase D.
+Last updated: 2026-05-18 — end of Phase H.
 
 ---
 
@@ -57,14 +57,41 @@ published on GitHub.
 | B     | Clipboard (read/write + tools/CLI) | ✅ done       |
 | C     | Notify / ask_user / confirm (kdialog→zenity) | ✅ done |
 | D     | Capacity modes (read-only/assist/full) filtering MCP tools | ✅ done |
-| H     | Audio / media (wpctl + playerctl backends) | ⏭ next   |
-| I     | Apps (launch_app, list windows enriched) | pending    |
+| H     | Audio / media (wpctl + playerctl backends) | ✅ done       |
+| I     | Apps (launch_app, list windows enriched) | ⏭ next       |
 | J     | Audit viewer + kill switch en tray | pending       |
 | E     | run_shell with safety rails        | pending       |
 | F     | OCR find_text (Tesseract)          | pending       |
 | G     | Memory (Markdown plano)            | pending       |
 
-## What just shipped (Phase D, this commit)
+## What just shipped (Phase H, this commit)
+
+- `backends/linux_audio_pipewire/wpctl_backend.py`: real wpctl
+  driver. Default sink/source aliases. Parses `Volume: 0.52` and
+  `Volume: 1.00 [MUTED]`. `set-mute toggle` requires a re-read of
+  `get-volume` to learn the new state (wpctl gives no other signal).
+  Clamps volume to 0.0-1.0 defensively (wpctl accepts >1.0 = >100%,
+  speaker-dangerous).
+- `backends/linux_audio_pipewire/playerctl_backend.py`: real
+  playerctl driver. Uses ASCII Unit Separator (0x1F) as field
+  delimiter in `--format` — discovered live that YouTube titles
+  contain literal `|`, which would have stolen tokens from artist.
+  `status()` pads missing fields to "" instead of IndexError.
+- `cli.py`: new `voice audio {get|set|mute|mic-mute}` and `voice
+  media {play|pause|next|prev|status}` groups.
+- `mcp_server.py`: new `_register_audio` + `_register_media`. 8
+  new tools. `audio_get_volume` and `media_status` placed in
+  `read-only` tier; the rest in `assist`.
+- 158 tests verde (eran 137): +20 in `test_backend_audio.py`,
+  +1 in `test_mcp_server.py`.
+- Smoke live OK: volume round-trip, mute toggle, YouTube title
+  with literal `|` parsed intact, MCP tool registration confirmed
+  (36 tools in assist now, eran 28).
+- New runtime dep: `playerctl` (pacman). `wireplumber` already
+  present. STATE.md updated.
+- ruff + mypy verde (52 source files, no new modules).
+
+## Previously shipped (Phase D)
 
 - New module `capacity.py`: `TIER_BY_TOOL` maps every MCP tool to a
   tier (`read-only` / `assist` / `full`); `allows(tool, mode)`,
@@ -141,19 +168,17 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase H — Audio / media.** Implementar
-   `linux_audio_pipewire/wpctl_backend.py` + `playerctl_backend.py`
-   (stubs). Capabilities `audio.*` + `media.*`. CLI `voice audio
-   {get|set|mute}` / `voice media {play|next|prev|status}`. MCP tools.
-   No olvidar añadir cada tool nuevo a `capacity.TIER_BY_TOOL` —
-   los read-only en read-only (audio.get/media.status), los acting
-   en assist (audio.set/mute, media.play/next/prev).
-2. **Phase I — Apps.** `launch_app` (gtk-launch / xdg-open),
+1. **Phase I — Apps.** `launch_app` (gtk-launch / xdg-open),
    `list_windows` enriched con icono/app-id. `launch_app` probablemente
-   `assist` (abre cosa nueva, reversible cerrándola).
-3. **Phase J — Audit viewer + kill switch en tray.** Submenu "Agente"
+   `assist` (abre cosa nueva, reversible cerrándola). Backend Linux
+   primero (`backends/linux_apps_xdg/`) y vía MCP tool sumar al
+   `TIER_BY_TOOL`.
+2. **Phase J — Audit viewer + kill switch en tray.** Submenu "Agente"
    con: ver `logs/agent.log` últimos N, toggle capacity_mode (con
    restart MCP automático), pause/resume.
+3. **Phase E — run_shell con safety rails.** Tier `full`. Allowlist
+   regex de comandos, timeout estricto, captura de stdout/stderr,
+   audit verbose. ADR nuevo para la política.
 
 ## Critical context to keep in your head
 
@@ -161,8 +186,8 @@ published on GitHub.
   `gist, read:org, repo, workflow`).
 - Repo público: <https://github.com/Juancoll/voice-opencode>, branch
   `main`. Commits previos: `40a41db`, `9d231ac`, `69e82c2`, `63f0755`,
-  `f95ad2f`, `30fc0cd` (Phase B), `6c53357` (Phase C), + el commit
-  Phase D que estás creando ahora.
+  `f95ad2f`, `30fc0cd` (Phase B), `6c53357` (Phase C), `f38c0dd`
+  (Phase D), + el commit Phase H que estás creando ahora.
 - Wrapper `./voice` exporta `PYTHONPATH=src` antes de
   `python -m voice_opencode`. Activa el venv local.
 - ydotool socket en `/run/user/1000/.ydotool_socket`.
@@ -221,14 +246,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 137 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 158 passing
 venv/bin/ruff check src tests                # all clean
 venv/bin/mypy src/voice_opencode             # no issues, 51 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase H.
+If any of those fail, fix them **before** starting Phase I.
 
 ## Files to read first when resuming
 

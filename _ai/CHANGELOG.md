@@ -5,6 +5,61 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-18 — Phase H: audio + media surface (wpctl + playerctl, MCP, CLI)
+
+- Phase 0 had wired stub ``WpctlAudioBackend`` and
+  ``PlayerctlMediaBackend`` that raised ``BackendError`` in
+  ``__init__``. Phase H replaces both with real implementations.
+- ``backends/linux_audio_pipewire/wpctl_backend.py``: real wpctl
+  driver. Operates on the default sink/source via the wpctl aliases
+  ``@DEFAULT_AUDIO_SINK@`` / ``@DEFAULT_AUDIO_SOURCE@``. Parses
+  ``Volume: 0.52`` and ``Volume: 1.00 [MUTED]`` lines. After a
+  ``set-mute toggle`` we re-read the volume line just to learn the
+  new muted state — wpctl gives no other signal. All four caps
+  declared: ``AUDIO_{VOLUME_GET,VOLUME_SET,MUTE_TOGGLE,MIC_MUTE_TOGGLE}``.
+  ``volume_set`` clamps to 0.0-1.0 defensively (wpctl would happily
+  set 1.5 = 150% otherwise, which can blow speakers).
+- ``backends/linux_audio_pipewire/playerctl_backend.py``: real
+  playerctl driver. Uses ``--format`` with **ASCII Unit Separator
+  (0x1F)** as field delimiter — discovered live that YouTube titles
+  contain literal ``|`` chars, which would have stolen tokens from
+  the artist field with a pipe-delimited format. The separator is
+  vanishingly unlikely in real metadata. All four caps:
+  ``MEDIA_{PLAY_PAUSE,NEXT,PREV,STATUS}``. ``status()`` returns
+  ``{player, status, title, artist}`` and pads missing fields to ""
+  rather than IndexError.
+- ``cli.py``: new ``voice audio {get|set|mute|mic-mute}`` and
+  ``voice media {play|pause|next|prev|status}`` groups (``play`` /
+  ``pause`` / ``toggle`` are aliases — MPRIS exposes a single
+  play_pause verb). Registered between ``dialog`` and ``platform``
+  in ``COMMANDS``.
+- ``mcp_server.py``: new ``_register_audio(mcp)`` and
+  ``_register_media(mcp)``. Eight tools total:
+  ``audio_get_volume``, ``audio_set_volume``, ``audio_mute_toggle``,
+  ``audio_mic_mute_toggle``, ``media_play_pause``, ``media_next``,
+  ``media_prev``, ``media_status``. Read-only tools (get_volume,
+  status) live in the ``read-only`` tier; the rest in ``assist``.
+  Added to ``capacity.TIER_BY_TOOL`` per ADR-0014.
+- 158 tests verde (eran 137): +20 in ``test_backend_audio.py``
+  covering both backends end-to-end (init guards, capabilities,
+  argv shape per op, volume parsing with/without ``[MUTED]``,
+  clamp behaviour, mute_toggle returns new state from re-read,
+  source vs sink target, missing-fields padding, pipe-tolerance,
+  failure paths, timeouts); +1 in ``test_mcp_server.py`` covering
+  tier placement (audio_get_volume and media_status visible in
+  read-only; setters/transport hidden until assist).
+- Smoke live OK on host: volume round-trip 1.00 → 0.50 → 1.00,
+  metadata from Chromium parsed correctly including the YouTube
+  title with literal ``|`` chars (would have failed silently with
+  a pipe delimiter — caught it on the first live probe).
+- New runtime dependency: ``playerctl`` (installed via pacman).
+  ``wireplumber`` was already present (system audio). STATE.md
+  updated.
+- ruff + mypy verde (52 source files, no new modules — the
+  backends grew, did not multiply).
+
+---
+
 ## 2026-05-18 — Phase D: capacity modes (read-only / assist / full filter for MCP tools)
 
 - New module ``capacity.py``: maps every MCP tool to a tier in

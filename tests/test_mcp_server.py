@@ -142,3 +142,18 @@ def test_capacity_full_exposes_everything(monkeypatch):
     assert "close_window" in names
     assert "type_text" in names
     assert "list_windows" in names
+
+
+def test_audio_media_tools_registered(monkeypatch):
+    """Phase H tools land in the right tiers."""
+    ro = _build_with(monkeypatch, "read-only")
+    assert "audio_get_volume" in ro
+    assert "media_status" in ro
+    assert "audio_set_volume" not in ro
+    assert "media_play_pause" not in ro
+
+    a = _build_with(monkeypatch, "assist")
+    for must in ("audio_set_volume", "audio_mute_toggle",
+                 "audio_mic_mute_toggle", "media_play_pause",
+                 "media_next", "media_prev"):
+        assert must in a

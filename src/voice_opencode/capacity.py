@@ -53,6 +53,8 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "notify":            "read-only",  # output-only, not destructive
     "sleep_ms":          "read-only",
     "platform_info":     "read-only",
+    "audio_get_volume":  "read-only",
+    "media_status":      "read-only",
     # --- assist (reversible / interactive) ---
     "type_text":                 "assist",
     "press_key":                 "assist",
@@ -71,6 +73,12 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "ask_confirm":               "assist",
     "ask_user":                  "assist",
     "ask_choice":                "assist",
+    "audio_set_volume":          "assist",
+    "audio_mute_toggle":         "assist",
+    "audio_mic_mute_toggle":     "assist",
+    "media_play_pause":          "assist",
+    "media_next":                "assist",
+    "media_prev":                "assist",
     # --- full (irreversible) ---
     "close_window":              "full",
     # "run_shell":               "full",  # Phase E

@@ -27,6 +27,8 @@ session. Refresh this whenever something material changes.
 | `kdialog`         | Blocking dialogs (preferred — Qt/KDE)  |
 | `zenity`          | Blocking dialogs (fallback — GTK; install only on non-KDE hosts) |
 | `libnotify`       | `notify-send`                          |
+| `wireplumber`     | `wpctl` (PipeWire audio control)       |
+| `playerctl`       | MPRIS media transport CLI              |
 | `alsa-utils`      | `arecord`                              |
 | `python`          | for the venv                           |
 

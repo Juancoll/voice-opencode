@@ -123,6 +123,39 @@ sudo pacman -S zenity
 # rare enough that adding one is YAGNI.
 ```
 
+## Drive audio + media from the CLI (Phase H)
+
+Audio is driven by ``wpctl`` against the default PipeWire sink (output)
+and source (microphone). Media is MPRIS via ``playerctl``, acting on
+whichever player was active most recently (browser tab, mpv, Spotify…).
+
+```bash
+voice audio get               # current output volume, e.g. "0.50"
+voice audio set 0.4           # set output volume (clamped to 0.0-1.0)
+voice audio mute              # toggle output mute — prints "muted"/"unmuted"
+voice audio mic-mute          # toggle microphone mute
+
+voice media play              # toggle play/pause (single MPRIS verb)
+voice media pause             # alias of 'play'
+voice media next              # skip
+voice media prev              # back
+voice media status            # JSON: {player, status, title, artist}
+```
+
+Volume above 1.0 (≈100%) is silently clamped — wpctl would accept it
+and route to PipeWire amplification, which can blow speakers. If you
+want louder, raise the global volume in your DE first.
+
+The status format uses ASCII Unit Separator (0x1F) internally, NOT
+``|``, because YouTube titles routinely contain literal pipes:
+"Foo | bar - YouTube". If you write a custom client that parses
+playerctl yourself, do the same or you'll lose tokens.
+
+No active player? Both ``status`` and the transport commands return
+``error: playerctl failed: No players found`` with rc=1. That's the
+expected behaviour — opening a YouTube tab and pausing it is enough
+to make a player appear.
+
 ## Capacity modes — limit what opencode can do (Phase D)
 
 Three tiers control which MCP tools opencode sees. Switching is a
@@ -130,9 +163,9 @@ single config write; the MCP server reads the setting at startup.
 
 | Mode        | What the model can do                                            | Tool count* |
 |-------------|------------------------------------------------------------------|-------------|
-| `read-only` | Observe only — list windows, capture screen, read clipboard, notify | 11        |
-| `assist`    | + drive UI: type, click, focus, move, dialogs, write clipboard   | 28          |
-| `full`      | + destructive: `close_window` (and future `run_shell`)            | 29          |
+| `read-only` | Observe only — list windows, capture screen, read clipboard, notify, audio_get_volume, media_status | 13 |
+| `assist`    | + drive UI: type, click, focus, move, dialogs, write clipboard, audio set/mute, media play/next/prev | 36 |
+| `full`      | + destructive: `close_window` (and future `run_shell`)            | 37          |
 
 \* on this host. Real count depends on which backend caps are wired.
 

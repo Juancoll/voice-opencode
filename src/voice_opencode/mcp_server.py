@@ -120,6 +120,8 @@ def build_server() -> Any:
     _register_windows(mcp)
     _register_clipboard(mcp)
     _register_dialogs(mcp)
+    _register_audio(mcp)
+    _register_media(mcp)
     _register_misc(mcp)
 
     return mcp
@@ -567,6 +569,135 @@ def _register_dialogs(mcp: Any) -> None:
                     return _err(exc)
             agent.audit("ask_choice", {"cancelled": ans is None, "choice": ans})
             return ans if ans is not None else ""
+
+
+def _register_audio(mcp: Any) -> None:
+    """Output/mic volume + mute (wpctl on Linux/PipeWire)."""
+
+    if _expose(cap.AUDIO_VOLUME_GET, "audio_get_volume"):
+        @mcp.tool(description=(
+            "Read the current output volume as a float in 0.0-1.0."
+        ))
+        def audio_get_volume() -> str:
+            if (e := _guard("audio_get_volume", {})):
+                return e
+            try:
+                level = plat.audio.volume_get()
+            except (BackendError, NotSupportedError) as exc:
+                return _err(exc)
+            agent.audit("audio_get_volume", {"level": level})
+            return f"{level:.2f}"
+
+    if _expose(cap.AUDIO_VOLUME_SET, "audio_set_volume"):
+        @mcp.tool(description=(
+            "Set the output volume. `level` is clamped to 0.0-1.0. "
+            "1.0 is 100%; higher values are silently capped."
+        ))
+        def audio_set_volume(level: float) -> str:
+            if (e := _guard("audio_set_volume", {"level": level})):
+                return e
+            with _acting():
+                try:
+                    plat.audio.volume_set(level)
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("audio_set_volume", {"level": level})
+            return f"set volume to {max(0.0, min(1.0, level)):.2f}"
+
+    if _expose(cap.AUDIO_MUTE_TOGGLE, "audio_mute_toggle"):
+        @mcp.tool(description=(
+            "Toggle output mute. Returns 'muted' or 'unmuted' "
+            "reflecting the NEW state."
+        ))
+        def audio_mute_toggle() -> str:
+            if (e := _guard("audio_mute_toggle", {})):
+                return e
+            with _acting():
+                try:
+                    muted = plat.audio.mute_toggle()
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("audio_mute_toggle", {"muted": muted})
+            return "muted" if muted else "unmuted"
+
+    if _expose(cap.AUDIO_MIC_MUTE_TOGGLE, "audio_mic_mute_toggle"):
+        @mcp.tool(description=(
+            "Toggle microphone mute. Returns 'muted' or 'unmuted' "
+            "reflecting the NEW state."
+        ))
+        def audio_mic_mute_toggle() -> str:
+            if (e := _guard("audio_mic_mute_toggle", {})):
+                return e
+            with _acting():
+                try:
+                    muted = plat.audio.mic_mute_toggle()
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("audio_mic_mute_toggle", {"muted": muted})
+            return "muted" if muted else "unmuted"
+
+
+def _register_media(mcp: Any) -> None:
+    """MPRIS transport control (playerctl on Linux)."""
+
+    if _expose(cap.MEDIA_PLAY_PAUSE, "media_play_pause"):
+        @mcp.tool(description=(
+            "Toggle play/pause on the currently active MPRIS player "
+            "(browser tab, mpv, Spotify, ...). Same as the keyboard "
+            "media key."
+        ))
+        def media_play_pause() -> str:
+            if (e := _guard("media_play_pause", {})):
+                return e
+            with _acting():
+                try:
+                    plat.media.play_pause()
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("media_play_pause", {})
+            return "toggled"
+
+    if _expose(cap.MEDIA_NEXT, "media_next"):
+        @mcp.tool(description="Skip to the next track on the active player.")
+        def media_next() -> str:
+            if (e := _guard("media_next", {})):
+                return e
+            with _acting():
+                try:
+                    plat.media.next()
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("media_next", {})
+            return "next"
+
+    if _expose(cap.MEDIA_PREV, "media_prev"):
+        @mcp.tool(description="Go to the previous track on the active player.")
+        def media_prev() -> str:
+            if (e := _guard("media_prev", {})):
+                return e
+            with _acting():
+                try:
+                    plat.media.prev()
+                except (BackendError, NotSupportedError) as exc:
+                    return _err(exc)
+            agent.audit("media_prev", {})
+            return "prev"
+
+    if _expose(cap.MEDIA_STATUS, "media_status"):
+        @mcp.tool(description=(
+            "Report the active MPRIS player and current track. "
+            "Returns {player, status, title, artist} as a dict."
+        ))
+        def media_status() -> dict[str, Any]:
+            if (e := _guard("media_status", {})):
+                return {"error": e}
+            try:
+                d = plat.media.status()
+            except (BackendError, NotSupportedError) as exc:
+                return {"error": str(exc)}
+            agent.audit("media_status",
+                        {"player": d.get("player"), "status": d.get("status")})
+            return d
 
 
 def _register_misc(mcp: Any) -> None:
