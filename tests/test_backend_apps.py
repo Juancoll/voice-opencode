@@ -184,7 +184,8 @@ class TestLaunch:
     def test_known_app_uses_gtk_launch(self, fake_xdg: Path) -> None:
         with patch.object(xdg.shutil, "which", return_value="/usr/bin/gtk-launch"):
             b = xdg.XdgAppLauncher()
-        with patch.object(xdg.subprocess, "run") as run, \
+        with patch.object(xdg.shutil, "which", return_value="/usr/bin/gtk-launch"), \
+             patch.object(xdg.subprocess, "run") as run, \
              patch.object(b, "_probe_pid", return_value=12345):
             run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr="")
@@ -199,7 +200,8 @@ class TestLaunch:
         with patch.object(xdg.shutil, "which", return_value="/usr/bin/gtk-launch"):
             b = xdg.XdgAppLauncher()
         mock_proc = MagicMock(pid=999)
-        with patch.object(xdg.subprocess, "run",
+        with patch.object(xdg.shutil, "which", return_value="/usr/bin/gtk-launch"), \
+             patch.object(xdg.subprocess, "run",
                           side_effect=subprocess.CalledProcessError(1, ["gtk-launch"])), \
              patch.object(xdg.subprocess, "Popen", return_value=mock_proc) as popen:
             pid = b.launch("firefox")
