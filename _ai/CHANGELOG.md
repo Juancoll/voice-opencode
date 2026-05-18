@@ -3,6 +3,35 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.5: STTBackend + WhisperCppSTTBackend; stt.py is a shim
+
+- Phase A.5: moves the ``whisper-cli`` invocation out of
+  ``src/voice_opencode/stt.py`` into
+  ``backends/common_whisper_cpp/stt.py``. ``stt.py`` becomes a
+  20-line shim that delegates to ``platform.stt.transcribe(wav)``
+  so ``pipeline.py`` keeps doing ``from . import stt`` unchanged.
+- Backend lives under ``common_`` (not ``linux_``) for the same
+  reason as Piper: identical CLI on Linux and Windows, only the
+  binary path changes via ``WHISPER_BIN`` env override. Defaults
+  to ``whisper-cli`` (Arch package, GitHub release, Windows .exe
+  once Phase C lands).
+- Model file and language stay sourced from ``config.settings``
+  inside the backend itself, so callers never pass them. Tag
+  markers like ``[BLANK_AUDIO]`` are stripped as before.
+  Subprocess is timeout-bounded (120 s) and reports failures
+  as ``BackendError`` (rc≠0, timeout, missing model).
+- New ``tests/test_backend_whisper_cpp.py`` (10 cases):
+  construction with/without whisper-cli on PATH, ``WHISPER_BIN``
+  env override, capability set, missing model → ``BackendError``,
+  argv shape (binary, ``-m``, ``-l``, ``-nt``, ``-np``, ``-f``,
+  WAV path), bracket-tag stripping (single + multiple), blank
+  audio → empty string, rc≠0 → ``BackendError``, timeout →
+  ``BackendError``, ``settings.whisper_lang`` honoured.
+- Verified: 390 tests (+10), ruff + mypy clean. Live end-to-end
+  smoke ran the just-produced ``tts.wav`` through ``transcribe()``
+  and got back recognisable Spanish text, closing the
+  Piper→WAV→whisper loop with the new architecture.
+
 ## 2026-05-19 — A.4: TTSBackend + PiperTTSBackend; tts.speak rewired
 
 - Phase A.4: cuts the streaming ``piper-tts | paplay`` pipe in

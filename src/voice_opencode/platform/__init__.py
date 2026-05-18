@@ -393,6 +393,10 @@ def _wire_common_linux(
     from ..backends.common_piper import tts as piper_tts
     if (b := _try(piper_tts.PiperTTSBackend, "common_piper.tts")):
         out["tts"] = b
+    # Voice pipeline: STT (whisper.cpp) — common backend, also used on Windows.
+    from ..backends.common_whisper_cpp import stt as whisper_stt
+    if (b := _try(whisper_stt.WhisperCppSTTBackend, "common_whisper_cpp.stt")):
+        out["stt"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):
