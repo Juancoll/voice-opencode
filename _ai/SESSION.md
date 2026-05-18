@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Tanda 2 (memory mutations + memory viewer; v0.1.0 released).
+Last updated: 2026-05-18 — end of Tanda 3 / Phase K (`platform_info()` consolidation; plan completo).
 
 ---
 
@@ -64,9 +64,37 @@ published on GitHub.
 | F     | OCR find_text (Tesseract)          | ✅ done       |
 | G     | Memory (Markdown plano)            | ✅ done       |
 | G+1   | Memory delete/edit + viewer + v0.1.0 release (Tanda 1+2) | ✅ done |
-| K     | OS-agnostic detect_*: replace UA strings with ``platform_info`` | ⏭ next (optional) |
+| K     | ``platform_info()`` structured host snapshot | ✅ done (Tanda 3) |
 
-## What just shipped (Tanda 1 + Tanda 2, this commit)
+## What just shipped (Phase K / Tanda 3, this commit)
+
+- New ``platform.platform_info(env=None, *, which=None) ->
+  PlatformInfo``. Pure function, injectable env + which for
+  tests. Frozen dataclass with ``platform``, ``session_type``,
+  ``desktop``, ``tools`` (frozenset of probed binaries on
+  PATH), captured ``env``, and ``is_hyprland`` / ``is_kde`` /
+  ``is_wayland`` / ``is_x11`` properties. ``to_dict()`` is
+  JSON-friendly with sorted ``tools``.
+- ``_PROBED_TOOLS`` covers every DE-implying binary any current
+  backend keys off (hyprctl, grim, wlr-randr, wtype, ydotool,
+  wl-copy, wl-paste, xclip, kdialog, zenity, notify-send,
+  gtk-launch, wpctl, playerctl, tesseract).
+- ``session_type`` is promoted from ``WAYLAND_DISPLAY`` /
+  ``DISPLAY`` when ``XDG_SESSION_TYPE`` is empty (matches
+  ``install.sh:80-81``).
+- MCP ``platform_info`` tool now returns the rich payload
+  (``platform`` + ``session_type`` + ``desktop`` + ``tools`` +
+  ``env`` + ``is_*`` predicates) on top of ``override`` /
+  ``capabilities`` / ``capacity_mode``. Tool count unchanged.
+- ``voice platform info`` mirrors the same JSON shape.
+- 9 new tests under ``TestPlatformInfo`` in
+  ``tests/test_platform.py``. Suite is 303 passing, ruff + mypy
+  clean.
+- See **ADR-0021** for rationale (consolidates env + which
+  probing + install.sh logic into one queryable structure;
+  keeps per-backend ``which`` guards as they are).
+
+## What previously shipped (Tanda 1 + Tanda 2)
 
 - **v0.1.0 released** on GitHub
   (https://github.com/Juancoll/voice-opencode/releases/tag/v0.1.0).

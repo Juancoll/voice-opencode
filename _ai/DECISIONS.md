@@ -5,6 +5,105 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0021 — `platform_info()`: structured host snapshot in one pure function
+
+Date: 2026-05-18
+
+### Context
+
+Platform-aware decisions in this repo were spread across three places:
+
+1. `voice_opencode.platform.detect_platform(env)` — pure, returns one
+   of the `PLATFORM_*` strings from env + `sys.platform`.
+2. The `shutil.which(...)` guards inside every backend's `__init__`
+   (`HyprlandWindowManager` needs `hyprctl`, `XclipClipboardBackend`
+   needs `xclip`, etc.). These raise `BackendError` if the tool is
+   missing — fail-loud at construction.
+3. The parallel bash logic in `install.sh:75-92` (`DISPLAY_KIND`,
+   `WM_HINT`, `IS_HYPRLAND`, `IS_KDE`) that picks pacman packages
+   and which dialog backend to install.
+
+The result: any caller that wanted a richer answer than "what's the
+platform string" — does this host have `kdialog`? is it Wayland or
+X11? what XDG vars are actually set? — had to either re-implement
+the detection or try-and-fail by constructing a backend. The MCP
+`platform_info` tool returned only `{platform, capabilities,
+capacity_mode}`, which is enough to decide capability presence but
+not enough for the agent to plan ahead ("should I ask via kdialog
+or fall back to typing in the focused window?").
+
+### Decision
+
+Add `voice_opencode.platform.platform_info(env=None, *, which=None)`
+that returns a frozen `PlatformInfo` dataclass with:
+
+- `platform` (same string `detect_platform` returns; included so
+  callers don't need two function calls),
+- `session_type` (`"wayland"`/`"x11"`/`""`, with `WAYLAND_DISPLAY` and
+  `DISPLAY` promoting an empty `XDG_SESSION_TYPE` — matches
+  `install.sh:80-81`),
+- `desktop` (lowercased `XDG_CURRENT_DESKTOP`),
+- `tools` (frozenset of probed binaries actually present on PATH,
+  drawn from `_PROBED_TOOLS` which lists every DE-implying tool any
+  current backend keys off — `hyprctl`, `grim`, `wlr-randr`, `wtype`,
+  `ydotool`, `wl-copy`, `wl-paste`, `xclip`, `kdialog`, `zenity`,
+  `notify-send`, `gtk-launch`, `wpctl`, `playerctl`, `tesseract`),
+- `env` (dict of the XDG/display env keys that were present),
+- convenience predicates `is_hyprland`, `is_kde`, `is_wayland`,
+  `is_x11` (the same names `install.sh` uses).
+
+Both `env` and `which` are injectable for tests — the function is
+pure (no calls to `os.environ` or `shutil.which` after the
+arguments are resolved). Output `to_dict()` is JSON-serialisable
+with sorted `tools` for stable diff-friendly output.
+
+`detect_platform()` keeps its existing signature and behaviour;
+`platform_info()` calls it internally rather than duplicating the
+sniffing. The MCP `platform_info` tool now returns the full
+`to_dict()` blob plus the existing `override`, `capabilities`,
+`capacity_mode` fields. `voice platform info` mirrors the same
+shape.
+
+### Alternatives
+
+- **Reuse `detect_platform` everywhere.** Already the case for the
+  single-string question; doesn't address the structured fields.
+- **Make every backend expose a static `probe_available() -> bool`
+  classmethod.** Considered. Rejected because (a) the question we
+  actually want to answer is "what's on this host", not "would each
+  of these 14 backends construct"; (b) the call site would still
+  need to know the class name. The tool-set probe in
+  `platform_info` answers the host-shape question once.
+- **Replace the per-backend `shutil.which` guards with a check
+  against `platform_info().tools`.** Rejected: the guards have to
+  stay because they run *at construction*, and we want fail-loud
+  there. `platform_info` is for callers that want to look before
+  they leap.
+- **Cache `platform_info()` result the way `_state` caches backend
+  wiring.** Rejected for v1. The function is cheap (one env-dict
+  copy + ~16 `shutil.which` calls, all PATH-cached by the OS) and
+  the agent benefits from re-probing if the user installs something
+  mid-session. Reconsider if it ever shows up in a profile.
+
+### Consequences
+
+- Tool count unchanged (we extended an existing read-only tool;
+  the agent now sees a richer payload but it's the same name).
+- The agent has a single read-only call to orient itself before
+  attempting any DE-coupled action ("is kdialog installed before I
+  ask the user?", "is this even Hyprland before I call workspace
+  ops?").
+- The duplication between Python and `install.sh` is now a
+  pinch-point: if we ever rewrite `install.sh` in Python it can
+  call `platform_info()` directly and the two stop drifting.
+- 9 new tests under `TestPlatformInfo` in `tests/test_platform.py`
+  cover Hyprland / KDE-Wayland / X11 snapshots, the
+  `WAYLAND_DISPLAY` and `DISPLAY` session promotion, env-key
+  filtering, empty tool set, JSON round-trip, and frozen-dataclass
+  enforcement.
+
+---
+
 ## ADR-0020 — Memory mutation: `delete(ts)` + `edit(ts, body)` gated to `full`
 
 Date: 2026-05-18
@@ -86,7 +185,9 @@ empty (we deleted its last entry), it is removed entirely so
   `edit` (same `_BAD_BODY_RE`), so the validation stays in one
   place.
 
+---
 
+## ADR-0019 — Agent memory: plain Markdown, one file per day, stdlib search
 
 Date: 2026-05-18
 

@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import agent, capacity
+from . import agent, capacity, config
 from . import platform as plat
 from .logging import log
 from .paths import SCREENSHOT_FILE
@@ -1051,11 +1051,23 @@ def _register_misc(mcp: Any) -> None:
             return f"slept {ms}ms"
 
     if capacity.allows("platform_info"):
-        @mcp.tool(description="Report the active platform and the wired backend capabilities.")
+        @mcp.tool(description=(
+            "Report the host snapshot the agent is running on: active "
+            "platform string ('linux-hyprland', 'linux-x11', etc.), "
+            "Wayland/X11 session type, desktop environment, set of "
+            "detected desktop tools on PATH (hyprctl, kdialog, wpctl, "
+            "playerctl, tesseract, …), captured XDG env vars, and the "
+            "wired backend capability set. Useful as a first call to "
+            "decide which downstream tools will actually work — e.g. "
+            "check 'kdialog' in tools before calling ask_user, or "
+            "is_hyprland before workspace ops."
+        ))
         def platform_info() -> dict[str, Any]:
+            info = plat.platform_info()
             return {
-                "platform": plat.active_platform,
-                "capabilities": sorted(plat.all_capabilities()),
+                **info.to_dict(),
+                "override":      config.settings.platform_override,
+                "capabilities":  sorted(plat.all_capabilities()),
                 "capacity_mode": capacity.current_mode(),
             }
 

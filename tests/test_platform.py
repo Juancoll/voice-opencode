@@ -11,7 +11,9 @@ from voice_opencode.platform import (
     PLATFORM_LINUX_X11,
     PLATFORM_MACOS,
     PLATFORM_WINDOWS,
+    PlatformInfo,
     detect_platform,
+    platform_info,
 )
 
 
@@ -119,3 +121,120 @@ def test_null_backends_raise_not_supported():
         pass
     else:
         raise AssertionError("Null backend should raise NotSupportedError")
+
+
+# ---------------------------------------------------------------------------
+# platform_info (Phase K)
+# ---------------------------------------------------------------------------
+def _fake_which(present: set[str]):
+    """which() stub that returns a fake path for tools in ``present``."""
+    return lambda name: f"/usr/bin/{name}" if name in present else None
+
+
+class TestPlatformInfo:
+    def test_hyprland_snapshot(self) -> None:
+        info = platform_info(
+            env={
+                "HYPRLAND_INSTANCE_SIGNATURE": "abc",
+                "XDG_SESSION_TYPE":            "wayland",
+                "XDG_CURRENT_DESKTOP":         "Hyprland",
+                "WAYLAND_DISPLAY":             "wayland-1",
+            },
+            which=_fake_which({"hyprctl", "grim", "wl-copy", "wl-paste"}),
+        )
+        assert isinstance(info, PlatformInfo)
+        assert info.platform == PLATFORM_LINUX_HYPRLAND
+        assert info.session_type == "wayland"
+        assert info.desktop == "hyprland"
+        assert info.is_hyprland is True
+        assert info.is_wayland is True
+        assert info.is_x11 is False
+        assert info.is_kde is False
+        assert "hyprctl" in info.tools
+        assert "grim" in info.tools
+        assert "kdialog" not in info.tools
+
+    def test_kde_wayland_snapshot(self) -> None:
+        info = platform_info(
+            env={
+                "XDG_SESSION_TYPE":    "wayland",
+                "XDG_CURRENT_DESKTOP": "KDE",
+                "WAYLAND_DISPLAY":     "wayland-0",
+            },
+            which=_fake_which({"kdialog", "notify-send", "wl-copy"}),
+        )
+        assert info.platform == PLATFORM_LINUX_KDE_WAYLAND
+        assert info.is_kde is True
+        assert info.is_hyprland is False
+        assert "kdialog" in info.tools
+
+    def test_x11_snapshot(self) -> None:
+        info = platform_info(
+            env={"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"},
+            which=_fake_which({"xclip"}),
+        )
+        assert info.platform == PLATFORM_LINUX_X11
+        assert info.is_x11 is True
+        assert info.is_wayland is False
+        assert "xclip" in info.tools
+
+    def test_wayland_display_promotes_session_when_xdg_unset(self) -> None:
+        """install.sh:80 logic — WAYLAND_DISPLAY alone implies wayland."""
+        info = platform_info(
+            env={"WAYLAND_DISPLAY": "wayland-1",
+                 "XDG_CURRENT_DESKTOP": "sway"},
+            which=_fake_which(set()),
+        )
+        assert info.session_type == "wayland"
+        assert info.is_wayland is True
+
+    def test_display_promotes_session_when_xdg_unset(self) -> None:
+        info = platform_info(
+            env={"DISPLAY": ":1"},
+            which=_fake_which(set()),
+        )
+        assert info.session_type == "x11"
+        assert info.is_x11 is True
+
+    def test_env_only_captures_present_keys(self) -> None:
+        info = platform_info(
+            env={"XDG_SESSION_TYPE": "wayland", "UNRELATED": "x"},
+            which=_fake_which(set()),
+        )
+        # Captured env is restricted to the known XDG/display keys
+        # and only includes ones that were actually set.
+        assert "XDG_SESSION_TYPE" in info.env
+        assert "DISPLAY" not in info.env
+        assert "UNRELATED" not in info.env
+
+    def test_tools_empty_when_nothing_on_path(self) -> None:
+        info = platform_info(
+            env={"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"},
+            which=_fake_which(set()),
+        )
+        assert info.tools == frozenset()
+
+    def test_to_dict_is_json_friendly(self) -> None:
+        import json
+        info = platform_info(
+            env={"HYPRLAND_INSTANCE_SIGNATURE": "abc",
+                 "XDG_SESSION_TYPE": "wayland"},
+            which=_fake_which({"hyprctl"}),
+        )
+        d = info.to_dict()
+        # Round-trips through json.
+        text = json.dumps(d)
+        again = json.loads(text)
+        assert again["platform"] == PLATFORM_LINUX_HYPRLAND
+        assert again["tools"] == ["hyprctl"]
+        assert again["is_hyprland"] is True
+        # Sorted tools for stable output.
+        assert d["tools"] == sorted(d["tools"])
+
+    def test_frozen_dataclass(self) -> None:
+        info = platform_info(env={}, which=_fake_which(set()))
+        try:
+            info.platform = "mutated"  # type: ignore[misc]
+        except Exception:
+            return
+        raise AssertionError("PlatformInfo should be frozen")

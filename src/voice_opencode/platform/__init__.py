@@ -36,7 +36,9 @@ force re-detection.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+from dataclasses import dataclass, field
 from typing import Any
 
 from . import capabilities as _cap_module
@@ -101,6 +103,171 @@ def detect_platform(env: dict[str, str] | None = None) -> str:
     if sys.platform.startswith("linux"):
         return PLATFORM_LINUX_GENERIC
     return PLATFORM_UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# platform_info — structured snapshot of the host (Phase K)
+# ---------------------------------------------------------------------------
+#
+# ``detect_platform`` only returns a single string. In practice both
+# the install script and several callers want richer info: which
+# session-vars were actually set, which display server is active,
+# which DE tools are available on PATH. Today that knowledge is split
+# between:
+#
+#   * ``detect_platform`` (env + sys.platform → string),
+#   * the ``shutil.which`` guards in each backend ``__init__``
+#     (fail loud at construction),
+#   * the parallel bash logic in ``install.sh`` (DISPLAY_KIND,
+#     WM_HINT, IS_HYPRLAND, IS_KDE).
+#
+# ``platform_info()`` is the single source of truth for "what does
+# this host look like to us", returning a frozen dataclass that is
+# cheap to compute (one env-dict copy + a handful of
+# ``shutil.which`` calls) and trivially serialisable to JSON. It
+# does **not** replace the per-backend ``which`` guards — those
+# need to stay so backend construction can fail loud on a missing
+# binary — it just exposes the same information up-front so callers
+# (CLI ``voice platform info``, the agent's read-only tools, future
+# diagnostics) can ask without having to try-and-fail.
+#
+# Tools probed are the ones the existing backends already key off
+# (the "DE-implying tools" inventory from the Phase K audit).
+# Adding more is free: just extend ``_PROBED_TOOLS``.
+_PROBED_TOOLS: tuple[str, ...] = (
+    # Hyprland / wlroots
+    "hyprctl", "wlr-randr", "grim",
+    # input
+    "wtype", "ydotool",
+    # clipboard
+    "wl-copy", "wl-paste", "xclip",
+    # dialogs / notifications
+    "kdialog", "zenity", "notify-send",
+    # apps
+    "gtk-launch",
+    # audio / media
+    "wpctl", "playerctl",
+    # OCR
+    "tesseract",
+)
+
+
+@dataclass(frozen=True)
+class PlatformInfo:
+    """Structured snapshot of the host environment.
+
+    Fields:
+      platform      — one of the ``PLATFORM_*`` constants (same value
+                      ``detect_platform()`` returns; included so
+                      callers don't have to call both).
+      session_type  — ``"wayland"`` / ``"x11"`` / ``""`` — lowercased
+                      ``XDG_SESSION_TYPE``. Empty when neither set
+                      nor inferable (e.g. macOS/Windows).
+      desktop       — lowercased ``XDG_CURRENT_DESKTOP``, e.g.
+                      ``"kde"``, ``"hyprland"``, ``"sway"``, ``""``.
+      tools         — frozenset of ``_PROBED_TOOLS`` members found
+                      on PATH right now. Use ``"hyprctl" in
+                      info.tools`` instead of re-doing the
+                      ``shutil.which`` dance at the call site.
+      env           — the raw env values we looked at, frozen, for
+                      diagnostics. Only includes keys that were
+                      present (no synthetic empty strings).
+    """
+
+    platform: str
+    session_type: str
+    desktop: str
+    tools: frozenset[str]
+    env: dict[str, str] = field(default_factory=dict)
+
+    # Convenience predicates — these are the names the install.sh
+    # script uses (``IS_HYPRLAND``, ``IS_KDE``) and the ones every
+    # caller eventually writes themselves. Keep them here so we
+    # share one definition.
+    @property
+    def is_hyprland(self) -> bool:
+        return self.platform == PLATFORM_LINUX_HYPRLAND
+
+    @property
+    def is_kde(self) -> bool:
+        return "kde" in self.desktop or "plasma" in self.desktop
+
+    @property
+    def is_wayland(self) -> bool:
+        return self.session_type == "wayland"
+
+    @property
+    def is_x11(self) -> bool:
+        return self.session_type == "x11"
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-friendly dump. Sorted ``tools`` for stable output."""
+        return {
+            "platform":     self.platform,
+            "session_type": self.session_type,
+            "desktop":      self.desktop,
+            "tools":        sorted(self.tools),
+            "env":          dict(self.env),
+            "is_hyprland":  self.is_hyprland,
+            "is_kde":       self.is_kde,
+            "is_wayland":   self.is_wayland,
+            "is_x11":       self.is_x11,
+        }
+
+
+# Env keys we care about. Read once into the snapshot so subsequent
+# changes to ``os.environ`` (e.g. tests) don't make the result drift.
+_INFO_ENV_KEYS: tuple[str, ...] = (
+    "HYPRLAND_INSTANCE_SIGNATURE",
+    "XDG_SESSION_TYPE",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_DESKTOP",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+)
+
+
+def platform_info(
+    env: dict[str, str] | None = None,
+    *,
+    which: Any = None,
+) -> PlatformInfo:
+    """Structured detection snapshot. Pure function, cheap, no side effects.
+
+    ``env``  — defaults to ``os.environ``. Pass a dict in tests so the
+               result is deterministic regardless of host.
+    ``which`` — defaults to ``shutil.which``. Tests inject a callable
+                that returns either a path or ``None`` so we don't
+                have to monkey-patch ``shutil``. Always called with
+                a single string argument.
+    """
+    e = dict(env) if env is not None else dict(os.environ)
+    w = which if which is not None else shutil.which
+
+    plat = detect_platform(e)
+    session = e.get("XDG_SESSION_TYPE", "").lower()
+    desktop = e.get("XDG_CURRENT_DESKTOP", "").lower()
+
+    # Promote WAYLAND_DISPLAY → session_type=wayland when XDG_SESSION_TYPE
+    # is unset, mirroring install.sh:80. detect_platform already does
+    # the equivalent dance for DISPLAY=x11 via the X11 branch, but it
+    # never writes back to session, so platform_info has to.
+    if not session:
+        if e.get("WAYLAND_DISPLAY"):
+            session = "wayland"
+        elif e.get("DISPLAY"):
+            session = "x11"
+
+    tools = frozenset(t for t in _PROBED_TOOLS if w(t))
+    captured_env = {k: e[k] for k in _INFO_ENV_KEYS if k in e}
+
+    return PlatformInfo(
+        platform=plat,
+        session_type=session,
+        desktop=desktop,
+        tools=tools,
+        env=captured_env,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +452,7 @@ __all__ = [
     "AppLauncher", "ShellBackend", "OCRBackend",
     "Window", "Workspace", "Monitor", "Rect", "OcrMatch",
     "active_platform", "supported", "all_capabilities", "detect_platform",  # noqa: F405
+    "platform_info", "PlatformInfo",
     "PLATFORM_LINUX_HYPRLAND", "PLATFORM_LINUX_KDE_WAYLAND",
     "PLATFORM_LINUX_WLROOTS", "PLATFORM_LINUX_X11",
     "PLATFORM_LINUX_GENERIC", "PLATFORM_MACOS", "PLATFORM_WINDOWS",

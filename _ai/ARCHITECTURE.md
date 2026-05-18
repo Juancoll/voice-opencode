@@ -93,6 +93,8 @@ from voice_opencode import platform as plat
 plat.active_platform                # "linux-hyprland" / "linux-x11" / …
 plat.all_capabilities()             # frozenset of cap strings currently active
 plat.supported(cap.WM_FOCUS_WINDOW) # True iff some backend declares that cap
+plat.platform_info()                # PlatformInfo (Phase K): platform, session_type,
+                                    # desktop, tools-on-PATH, captured env, is_* preds
 
 plat.wm.list_windows()              # list[Window]
 plat.input.type_text("hi")

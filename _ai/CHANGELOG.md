@@ -3,6 +3,47 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Tanda 3 / Phase K: `platform_info()` structured host snapshot
+
+- New ``voice_opencode.platform.platform_info(env=None, *,
+  which=None) -> PlatformInfo``. Pure function: takes injectable
+  env dict and ``shutil.which`` callable so tests don't need to
+  monkey-patch anything. Returns a frozen dataclass with
+  ``platform`` (same string ``detect_platform`` returns),
+  ``session_type``, ``desktop``, ``tools`` (frozenset of probed
+  binaries actually on PATH from ``_PROBED_TOOLS``), captured
+  ``env`` dict, and convenience predicates ``is_hyprland``,
+  ``is_kde``, ``is_wayland``, ``is_x11``.
+- ``_PROBED_TOOLS`` lists every DE-implying binary any current
+  backend keys off: ``hyprctl``, ``wlr-randr``, ``grim``,
+  ``wtype``, ``ydotool``, ``wl-copy``, ``wl-paste``, ``xclip``,
+  ``kdialog``, ``zenity``, ``notify-send``, ``gtk-launch``,
+  ``wpctl``, ``playerctl``, ``tesseract``. Extending the set is
+  one-line.
+- ``session_type`` is promoted from ``WAYLAND_DISPLAY`` /
+  ``DISPLAY`` when ``XDG_SESSION_TYPE`` is empty, matching
+  ``install.sh:80-81`` so install-time and runtime detection agree.
+- ``PlatformInfo.to_dict()`` returns a JSON-friendly snapshot
+  with sorted ``tools`` for stable diff-friendly output.
+- ``detect_platform()`` kept as-is (single-string answer);
+  ``platform_info`` composes it internally. The per-backend
+  ``shutil.which`` guards stay too — they're for fail-loud
+  construction, ``platform_info`` is for look-before-you-leap.
+- MCP ``platform_info`` tool now returns the richer payload
+  (``platform``, ``session_type``, ``desktop``, ``tools``,
+  ``env``, the four ``is_*`` predicates) plus the existing
+  ``override`` / ``capabilities`` / ``capacity_mode`` fields.
+  Tool count unchanged — same name, richer body.
+- ``voice platform info`` CLI mirrors the same JSON shape.
+- 9 new tests in ``tests/test_platform.py`` (``TestPlatformInfo``)
+  covering Hyprland / KDE-Wayland / X11 snapshots, env-driven
+  session-type promotion, env-key filtering, empty tool set,
+  JSON round-trip, and frozen-dataclass enforcement. Suite is
+  now 303 tests.
+- See **ADR-0021** for the consolidation rationale and the
+  alternatives rejected (per-backend ``probe_available()``,
+  replacing the construction-time guards, caching the result).
+
 ## 2026-05-18 — Tanda 2: memory delete/edit + memory viewer + v0.1.0
 
 - Released **v0.1.0** to GitHub

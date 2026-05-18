@@ -907,15 +907,24 @@ def cmd_memory(args: list[str]) -> int:
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
-    voice platform info        — active platform and full capability set
+    voice platform info        — active platform, host snapshot, full capability set
     voice platform caps        — just the capability set, one per line
     """
     sub = args[0] if args else "info"
     if sub == "info":
+        info = plat.platform_info()
         print(json.dumps(
             {
-                "platform":     plat.active_platform,
+                "platform":     info.platform,
                 "override":     config.settings.platform_override,
+                "session_type": info.session_type,
+                "desktop":      info.desktop,
+                "is_hyprland":  info.is_hyprland,
+                "is_kde":       info.is_kde,
+                "is_wayland":   info.is_wayland,
+                "is_x11":       info.is_x11,
+                "tools":        sorted(info.tools),
+                "env":          info.env,
                 "capabilities": sorted(plat.all_capabilities()),
             },
             indent=2, ensure_ascii=False,
