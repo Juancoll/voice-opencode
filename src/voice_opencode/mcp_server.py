@@ -123,6 +123,7 @@ def build_server() -> Any:
     _register_audio(mcp)
     _register_media(mcp)
     _register_apps(mcp)
+    _register_shell(mcp)
     _register_misc(mcp)
 
     return mcp
@@ -771,6 +772,51 @@ def _register_apps(mcp: Any) -> None:
                     return _err(exc)
             agent.audit("apps_kill", {"target": pid_or_app_id})
             return "killed"
+
+
+def _register_shell(mcp: Any) -> None:
+    """Arbitrary shell exec with safety rails (Phase E).
+
+    Tier-gated to ``full`` only (see ``capacity.TIER_BY_TOOL``).
+    The backend enforces a default-deny allowlist on top — even
+    in ``full``, only commands whose basename fullmatches a regex
+    in ``settings.shell_allowlist`` can be executed. See ADR-0017.
+    """
+
+    if _expose(cap.SHELL_RUN, "shell_run"):
+        @mcp.tool(description=(
+            "Execute a shell command with rails. argv is parsed with "
+            "shlex; shell metacharacters (|, ;, &&, $(...), `...`, >) "
+            "are rejected. argv[0] basename must fullmatch an entry in "
+            "the user's allowlist. Defaults to dry_run=True; pass "
+            "dry_run=False to actually run. Returns {rc, stdout, "
+            "stderr, dry_run, cmd, cwd}; rc=-1 means timeout."
+        ))
+        def shell_run(
+            cmd: str,
+            cwd: str | None = None,
+            timeout: float = 10.0,
+            dry_run: bool = True,
+        ) -> dict[str, Any]:
+            if (e := _guard("shell_run", {"cmd": cmd, "dry_run": dry_run})):
+                return {"error": e}
+            with _acting():
+                try:
+                    r = plat.shell.run(cmd, cwd=cwd,
+                                       timeout=timeout, dry_run=dry_run)
+                except (BackendError, NotSupportedError) as exc:
+                    agent.audit("shell_run",
+                                {"cmd": cmd, "denied": True}, str(exc))
+                    return {"error": str(exc)}
+            agent.audit("shell_run", {
+                "cmd":     r.get("cmd"),
+                "cwd":     r.get("cwd"),
+                "rc":      r.get("rc"),
+                "dry_run": r.get("dry_run"),
+                "stdout_len": len(r.get("stdout", "")),
+                "stderr_len": len(r.get("stderr", "")),
+            })
+            return r
 
 
 def _register_misc(mcp: Any) -> None:

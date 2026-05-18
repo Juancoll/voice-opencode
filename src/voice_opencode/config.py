@@ -49,6 +49,22 @@ class Settings:
     # Capacity mode for the MCP agent: "read-only" | "assist" | "full".
     # Used by Phase D (capacity_modes) to filter exposed tools.
     capacity_mode: str = "assist"
+    # Shell allowlist (Phase E): default-deny + explicit regex match on
+    # argv[0]. Each entry is a Python regex that the *basename* of the
+    # command must fully match (re.fullmatch). Empty tuple = no command
+    # is ever allowed (which is the safest possible default — opt in by
+    # editing config.json). The shell tool also lives in `full` tier
+    # only, so even with this list populated the model can't reach it
+    # in read-only or assist.
+    shell_allowlist: tuple[str, ...] = (
+        r"ls", r"cat", r"head", r"tail", r"wc",
+        r"rg", r"grep", r"find", r"file", r"stat",
+        r"jq", r"yq",
+        r"git", r"hg",
+        r"echo", r"true", r"false", r"date", r"pwd", r"whoami",
+        r"python3?", r"node",
+    )
+    shell_timeout_s: float = 10.0
 
     @property
     def opencode_url(self) -> str:
@@ -78,18 +94,34 @@ ENV_MAP: Final[dict[str, str]] = {
 # Loaders
 # ---------------------------------------------------------------------------
 def _coerce(raw: Any, default: Any, key: str = "") -> Any:
-    """Cast a value (str|bool|int) to the type of ``default``."""
+    """Cast a value (str|bool|int|float|tuple) to the type of ``default``."""
     if isinstance(default, bool):
         if isinstance(raw, bool):
             return raw
         return str(raw).lower() in ("1", "true", "yes", "on")
-    if isinstance(default, int):
+    if isinstance(default, int) and not isinstance(default, bool):
         try:
             return int(raw)
         except (TypeError, ValueError) as e:
             raise ValueError(
                 f"Config key {key!r} must be an integer (got {raw!r})"
             ) from e
+    if isinstance(default, float):
+        try:
+            return float(raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"Config key {key!r} must be a number (got {raw!r})"
+            ) from e
+    if isinstance(default, tuple):
+        # Accept JSON list, or comma-separated string for env/CLI.
+        if isinstance(raw, list | tuple):
+            return tuple(str(x) for x in raw)
+        if isinstance(raw, str):
+            return tuple(s.strip() for s in raw.split(",") if s.strip())
+        raise ValueError(
+            f"Config key {key!r} must be a list or comma string (got {raw!r})"
+        )
     return raw  # str passthrough
 
 

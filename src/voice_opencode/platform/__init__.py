@@ -197,6 +197,9 @@ def _wire_common_linux(
     from ..backends.linux_apps_xdg import xdg_backend
     if (b := _try(xdg_backend.XdgAppLauncher, "linux_apps_xdg")):
         out["apps"] = b
+    from ..backends.linux_shell_posix import shell_backend
+    if (b := _try(shell_backend.PosixShellBackend, "linux_shell_posix")):
+        out["shell"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):

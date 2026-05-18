@@ -173,3 +173,13 @@ def test_apps_tools_registered(monkeypatch):
 
     f = _build_with(monkeypatch, "full")
     assert "apps_kill" in f
+
+
+def test_shell_run_only_in_full(monkeypatch):
+    """Phase E: shell_run must NOT leak into read-only or assist."""
+    ro = _build_with(monkeypatch, "read-only")
+    assert "shell_run" not in ro
+    a = _build_with(monkeypatch, "assist")
+    assert "shell_run" not in a
+    f = _build_with(monkeypatch, "full")
+    assert "shell_run" in f

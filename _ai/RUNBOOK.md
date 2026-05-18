@@ -188,6 +188,53 @@ Capacity tiers: ``list`` and ``running`` are ``read-only``;
 ``launch`` is ``assist``; ``kill`` is ``full`` (SIGTERM destroys
 unsaved state in editors / terminals). See ADR-0015 for why.
 
+## Run shell commands with rails (Phase E)
+
+The agent's most dangerous tool. Three layered rails (ADR-0017),
+all enforced by the backend:
+
+1. **No shell, ever.** ``subprocess.run(argv, shell=False)``.
+   String input goes through ``shlex.split``; list input is
+   passed through verbatim.
+2. **Shell metacharacters rejected.** ``;``, ``|``, ``&``,
+   `` ` ``, ``$``, ``<``, ``>`` in *any* parsed token → error.
+   This catches both ``"ls | wc"`` and list-form attempts.
+3. **Default-deny basename allowlist.** ``Path(argv[0]).name``
+   must ``re.fullmatch`` a pattern in ``settings.shell_allowlist``.
+   Empty list → everything rejected.
+
+The tool is in the ``full`` tier only; opencode never sees it in
+``read-only`` or ``assist``. ``dry_run=True`` is the default; the
+caller must explicitly pass ``dry_run=False`` (or ``--exec`` on
+the CLI) to actually spawn.
+
+```bash
+voice shell allowlist                    # show active regex patterns
+voice shell run echo hola                # dry run — prints parsed argv
+voice shell run --exec echo hola         # actually run
+voice shell run --exec rm -rf /tmp/x     # rejected — 'rm' not in allowlist
+voice shell run "ls | wc"                # rejected — shell metachar
+```
+
+Default allowlist (read-mostly): ``ls cat head tail wc rg grep
+find file stat jq yq git hg echo true false date pwd whoami
+python3? node``. Notably absent: ``rm mv cp chmod chown sudo
+systemctl pacman pkill kill sh bash sleep``. Add per-project
+patterns in ``config.json`` under ``shell_allowlist`` (one regex
+per element; matched with ``re.fullmatch`` against the basename).
+
+Other knobs:
+
+- ``shell_timeout_s`` — default 10 s, hard-capped at 60 s by the
+  backend regardless of caller request.
+- Output: stdout and stderr each truncated to 64 KB; truncation
+  is visible (``[truncated: …]`` marker).
+- Timeout returns ``rc=-1`` with partial output and an
+  ``[timeout after Ns]`` note — never raises.
+- Audit log records full argv, cwd, rc, dry_run flag, and
+  stdout/stderr *lengths* (not contents — keeps logs small and
+  avoids leaking secrets from environment dumps).
+
 ## Audit & capacity from the tray (Phase J)
 
 The tray's **Agente** submenu has two entries:

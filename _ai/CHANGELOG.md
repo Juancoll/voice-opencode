@@ -3,6 +3,64 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Phase E: ``shell_run`` with safety rails
+
+- New ``backends/linux_shell_posix/shell_backend.py`` —
+  ``PosixShellBackend`` implementing the long-stubbed
+  ``ShellBackend`` Protocol. Three layered rails (ADR-0017):
+  (1) ``shell=False`` always; string input goes through
+  ``shlex.split``; (2) post-parse shell-metachar scan rejects
+  ``;|&`` `` ` `` ``$<>`` even on list input (catches
+  ``["echo", "a;b"]``); (3) default-deny ``re.fullmatch`` on
+  ``Path(argv[0]).name`` against ``settings.shell_allowlist``.
+  Empty allowlist → everything rejected. ``dry_run=True``
+  default. Timeout hard-capped at 60 s. Output truncated to
+  64 KB per stream. Timeout returns ``rc=-1`` + partial output
+  + ``[timeout after Ns]`` note, never raises. ``OSError`` →
+  ``BackendError``.
+- ``config.Settings``: new ``shell_allowlist: tuple[str, ...]``
+  (default ~20 read-mostly tools — ``ls cat head tail wc rg
+  grep find file stat jq yq git hg echo true false date pwd
+  whoami python3? node``; notably no ``rm mv cp sudo systemctl
+  pacman sh bash``) and ``shell_timeout_s: float = 10.0``.
+  ``_coerce`` extended for ``float`` and tuple types.
+- ``platform/__init__.py``: wires ``PosixShellBackend`` into the
+  ``shell`` slot for the linux variants block.
+- ``capacity.py``: ``"shell_run": "full"``. Verified live —
+  ``shell_run`` does NOT appear in ``read-only`` (15 tools) or
+  ``assist`` (39 tools); only in ``full`` (42 tools, +1 vs
+  Phase J's 41).
+- ``cli.py``: new ``voice shell {run|allowlist}`` group.
+  ``run`` is dry-run by default; ``--exec`` flag actually
+  spawns. ``allowlist`` prints the active regex patterns one
+  per line.
+- ``mcp_server.py``: new ``_register_shell(mcp)`` exposing
+  ``shell_run(cmd, cwd?, timeout?, dry_run=True)``, gated via
+  ``_expose(cap.SHELL_RUN, "shell_run")``. Audit log records
+  ``{cmd, cwd, rc, dry_run, stdout_len, stderr_len}`` — never
+  contents (privacy + log size). Denied calls audit
+  ``{cmd, denied: True}`` with the error message.
+- New **ADR-0017** documenting the allowlist + no-shell +
+  metachar-reject policy and alternatives rejected (denylist;
+  ``shell=True`` + sanitisation; per-call confirm dialog;
+  full-string allowlist).
+- 219 tests verde (eran 192): +26 in ``tests/test_backend_shell.py``
+  (allowlist match/miss, regex boundary, metachar rejection in
+  str and list, unbalanced quote, dry-run no-Popen, real exec
+  captures stdout, non-zero rc, cwd applied, timeout returns
+  rc=-1, timeout hard-cap, truncation helper, capability set,
+  defaults from config); +1 in ``tests/test_mcp_server.py`` —
+  ``test_shell_run_only_in_full`` verifies the tier gate.
+- Smoke live OK: ``./voice shell allowlist`` lists the default
+  patterns; ``./voice shell run echo hola`` returns
+  ``dry_run=true`` with parsed argv; ``--exec`` echoes the
+  string; ``run --exec rm …`` rejected with "not in allowlist";
+  ``run "echo a | grep b"`` rejected with "shell metachar".
+  MCP tool counts: read-only 15, assist 39, full 42.
+- No new runtime dep (stdlib ``subprocess`` + ``shlex`` + ``re``).
+- ruff + mypy verde (57 source files, +2: shell backend module
+  + ``__init__``).
+
 ## 2026-05-18 — Phase J: audit viewer + capacity kill-switch in tray
 
 - New ``audit_tail(n)`` reader on ``agent`` (alongside ``audit``).

@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase J.
+Last updated: 2026-05-18 — end of Phase E.
 
 ---
 
@@ -60,11 +60,44 @@ published on GitHub.
 | H     | Audio / media (wpctl + playerctl backends) | ✅ done       |
 | I     | Apps (XDG launcher: list/running/launch/kill) | ✅ done    |
 | J     | Audit viewer + capacity kill-switch en tray | ✅ done    |
-| E     | run_shell with safety rails        | ⏭ next       |
-| F     | OCR find_text (Tesseract)          | pending       |
+| E     | run_shell with safety rails        | ✅ done       |
+| F     | OCR find_text (Tesseract)          | ⏭ next       |
 | G     | Memory (Markdown plano)            | pending       |
+| K     | OS-agnostic detect_*: replace UA strings with ``platform_info`` | pending |
 
-## What just shipped (Phase J, this commit)
+## What just shipped (Phase E, this commit)
+
+- ``backends/linux_shell_posix/shell_backend.py``: real
+  ``PosixShellBackend``. Three layered rails (ADR-0017):
+  ``shell=False`` always; post-parse scan rejects shell
+  metacharacters (``;|&`` `` ` `` ``$<>``) on both string and list
+  input; default-deny ``re.fullmatch`` on ``Path(argv[0]).name``
+  against ``settings.shell_allowlist``. Empty allowlist →
+  everything rejected. ``dry_run=True`` is the default.
+  Timeout hard-capped at 60 s. Output truncated at 64 KB per
+  stream. Timeout returns ``rc=-1`` + partial output, never
+  raises. ``OSError`` → ``BackendError``.
+- ``config.Settings``: ``shell_allowlist`` (default ~20
+  read-mostly tools, notably no ``rm/mv/cp/sudo/sh/bash``) and
+  ``shell_timeout_s=10.0``.
+- ``platform/__init__.py``: wires the new backend into the
+  ``shell`` slot for linux.
+- ``capacity.py``: ``"shell_run": "full"``. Verified live —
+  read-only 15, assist 39, full 42 (+1 vs Phase J).
+- ``cli.py``: new ``voice shell {run|allowlist}`` group. ``run``
+  is dry-run by default; ``--exec`` actually spawns.
+- ``mcp_server.py``: new ``_register_shell`` with the single tool
+  ``shell_run``. Audit records argv, cwd, rc, dry_run, and
+  ``stdout_len/stderr_len`` (lengths, not contents).
+- New **ADR-0017** — allowlist policy and alternatives rejected.
+- 219 tests verde (eran 192): +26 in ``test_backend_shell.py``,
+  +1 in ``test_mcp_server.py`` (tier gate).
+- Smoke live OK: dry-run, exec, denied basename, metachar reject
+  all behave as specified.
+- ruff + mypy verde (57 source files, +2).
+- No new runtime dep.
+
+## Previously shipped (Phase J)
 
 - `agent.audit_tail(n)`: new reader paired with the existing
   `audit` writer. Skips malformed/non-dict JSON lines, never
@@ -221,28 +254,21 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase E — run_shell con safety rails.** Tier `full`.
-   Allowlist regex de comandos (denylist por defecto + lista
-   permisiva por config), timeout estricto, captura
-   stdout/stderr, audit verbose. ADR nuevo para la política
-   de allowlist. El stub `ShellBackend` ya existe en
-   `platform/base.py`. Nuevo backend
-   `backends/linux_shell_posix/`. CLI `voice shell run <cmd>`
-   y MCP tool `shell_run`. Importante: NUNCA llegar a
-   capacity-mode `assist` aunque sea read-only para algo —
-   el daño potencial es total.
-2. **Phase F — OCR find_text (Tesseract).** Tomar
+1. **Phase F — OCR find_text (Tesseract).** Tomar
    `screen.capture_*` + tesseract → encontrar texto y
    devolver bounding box. Backend nuevo
    `backends/linux_ocr_tesseract/`. Capability
    `screen.find_text`. Tier `read-only`. Requiere `pacman -S
    tesseract tesseract-data-eng tesseract-data-spa` (preguntar
    al usuario antes de instalar).
-3. **Phase G — Memory (Markdown plano).** Persistir
+2. **Phase G — Memory (Markdown plano).** Persistir
    conversaciones del agente en `memory/YYYY-MM-DD.md`,
    tool MCP `memory_search` / `memory_append`. Sin DB; solo
    ripgrep o fts5 si crece. Tier read-only para search,
    assist para append.
+3. **Phase K (futuro, opcional)** — OS-agnostic detection helpers:
+   reemplazar UA-strings y heurísticas dispersas por
+   ``platform_info`` consultable y testeable.
 
 ## Critical context to keep in your head
 
@@ -296,6 +322,13 @@ published on GitHub.
   `_expose(cap, name)` combines capability + capacity into one gate.
   Reading `config.settings` dynamically (not at import) avoids a
   caching footgun.
+- ADR-0017: `shell_run` policy — default-deny regex allowlist on
+  `argv[0]` basename, `shell=False` always, post-parse rejection
+  of shell metacharacters (`;|&` `` ` ``$<>) even on list input,
+  `dry_run=True` default, 60 s hard timeout cap, 64 KB output
+  truncation, audit records lengths not contents, tool lives in
+  `full` tier only. Denylist + sanitisation + per-call dialog all
+  rejected with rationale.
 
 ## Environment variables (optional)
 
@@ -311,14 +344,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 192 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 219 passing
 venv/bin/ruff check src tests                # all clean
-venv/bin/mypy src/voice_opencode             # no issues, 51 files
+venv/bin/mypy src/voice_opencode             # no issues, 57 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase E.
+If any of those fail, fix them **before** starting Phase F.
 
 ## Files to read first when resuming
 

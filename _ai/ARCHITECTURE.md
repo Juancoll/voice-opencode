@@ -41,6 +41,7 @@ voice-opencode/
 │       ├── linux_clipboard_x11/   # xclip (real, Phase B)
 │       ├── linux_audio_pipewire/  # wpctl + playerctl (real, Phase H)
 │       ├── linux_apps_xdg/        # gtk-launch + /proc + .desktop (real, Phase I)
+│       ├── linux_shell_posix/     # subprocess + allowlist + no-shell (real, Phase E)
 │       ├── linux_dialog_kde/      # kdialog (real, Phase C) + libnotify (real)
 │       ├── linux_dialog_gtk/      # zenity (real, Phase C — fallback)
 │       ├── macos_stub/            # placeholder for AppleScript/Quartz

@@ -85,7 +85,7 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     # --- full (irreversible) ---
     "close_window":              "full",
     "apps_kill":                 "full",
-    # "run_shell":               "full",  # Phase E
+    "shell_run":                 "full",
 }
 
 

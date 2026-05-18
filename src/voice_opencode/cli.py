@@ -659,6 +659,41 @@ def cmd_apps(args: list[str]) -> int:
     return 0
 
 
+def cmd_shell(args: list[str]) -> int:
+    """
+    voice shell allowlist            — print active shell allowlist regexes
+    voice shell run <cmd>            — dry-run a command (preview argv)
+    voice shell run --exec <cmd>     — actually execute (still gated by allowlist)
+    """
+    if not args:
+        _eprint(cmd_shell.__doc__)
+        return 1
+    sub = args[0]
+    try:
+        if sub == "allowlist":
+            for p in config.settings.shell_allowlist:
+                print(p)
+            return 0
+        if sub == "run":
+            rest = args[1:]
+            do_exec = False
+            if rest and rest[0] == "--exec":
+                do_exec = True
+                rest = rest[1:]
+            if not rest:
+                _eprint("Usage: voice shell run [--exec] <cmd...>")
+                return 1
+            cmd_str = " ".join(rest)
+            r = plat.shell.run(cmd_str, dry_run=not do_exec)
+            print(json.dumps(r, indent=2, ensure_ascii=False))
+            return 1 if r.get("rc", 0) not in (0,) else 0
+        _eprint(cmd_shell.__doc__)
+        return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+
+
 # ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
@@ -707,6 +742,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "audio":      cmd_audio,
     "media":      cmd_media,
     "apps":       cmd_apps,
+    "shell":      cmd_shell,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

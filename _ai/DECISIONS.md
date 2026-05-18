@@ -5,6 +5,103 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0017 — `shell_run` policy: default-deny regex allowlist + no shell
+
+Date: 2026-05-18
+
+### Context
+
+Phase E adds ``shell_run`` so the agent can execute arbitrary
+commands. This is the single most dangerous capability in the
+project — once it exists, every other safety rail (capacity tiers,
+dialog confirms, per-call lock) is only as good as the
+restrictions wrapping this tool.
+
+The naive implementations all fail:
+
+- ``subprocess.run(cmd, shell=True)`` is a remote-code-execution
+  vector handed to a probabilistic agent. ``rm -rf ~`` is two
+  hallucinated tokens away.
+- A *denylist* (block ``rm``, ``dd``, ``shutdown``, …) is
+  impossible to exhaust: ``python -c 'import os; os.remove(...)'``,
+  ``find . -delete``, ``mv * /dev/null``, ``> ~/.bashrc``, …
+- Even an allowlist of "safe" binaries breaks the moment the
+  caller can sneak in ``|``, ``;``, ``&&``, ``$(...)``, ``` ` ` ```,
+  or redirection — every one of those is a way to call an
+  unallowed program from inside an allowed one.
+
+### Decision
+
+Three layered rails, all enforced by the backend (not by the MCP
+glue, not by the CLI — by the only place that actually spawns the
+process):
+
+1. **No shell, ever.** ``subprocess.run(argv, shell=False)`` only.
+   String input is tokenised with ``shlex.split``; list input is
+   passed through.
+2. **Shell metacharacter scan.** After tokenisation, every argv
+   element is scanned for any of ``;|&`` `` ` ``$<>``. Match → reject.
+   This catches both ``"ls | wc"`` (shlex would happily produce
+   ``["ls", "|", "wc"]``) and list-form attempts like
+   ``["echo", "a;b"]``.
+3. **Default-deny basename allowlist.** ``argv[0]`` is reduced to
+   its basename (``/usr/bin/ls`` → ``ls``) and matched with
+   ``re.fullmatch`` against each pattern in
+   ``settings.shell_allowlist``. No match → reject. Empty
+   allowlist → everything rejected (safest possible default —
+   the user opts in by editing ``config.json``).
+
+Additional rails:
+
+- ``dry_run=True`` is the default. Callers (and the model) must
+  explicitly pass ``dry_run=False`` to actually spawn.
+- Timeout is hard-capped at 60 s regardless of caller request.
+- ``stdout`` / ``stderr`` are captured and truncated to 64 KB
+  each before returning.
+- Timeout returns ``rc=-1`` plus partial output and an appended
+  ``[timeout after Ns]`` note — never raises.
+- The MCP tool ``shell_run`` lives in the ``full`` tier only
+  (ADR-0014). It is NOT exposed in ``assist`` or ``read-only``.
+
+The default ``shell_allowlist`` ships with read-mostly tools:
+``ls cat head tail wc rg grep find file stat jq yq git hg echo
+true false date pwd whoami python3? node``. Notably absent:
+``rm mv cp chmod chown sudo systemctl pacman pkill kill sh bash
+sleep``. The user can add patterns per-project in ``config.json``.
+
+### Alternatives considered
+
+- **Denylist.** Rejected — fundamentally unbounded; cf. ``find
+  -delete``, ``python -c``, redirection.
+- **``shell=True`` + sanitisation.** Rejected — no parser short
+  of a full POSIX shell handles all the corner cases (quoting,
+  parameter expansion, history substitution); even then the LLM
+  can craft escapes.
+- **Allowlist of full command strings.** Rejected — defeats the
+  purpose; agent can't compose arguments.
+- **Per-call user confirmation dialog.** Considered for
+  ``assist`` tier — rejected as primary defence (dialog fatigue;
+  user clicks yes), but the user can opt in by leaving the
+  allowlist empty and the tool out of ``full``. Future ADR if we
+  add it.
+- **``dry_run=False`` as default.** Rejected — symmetry with the
+  rest of the project (dialogs default to blocking, type/click
+  default to actual, sure — but those are scoped to keyboard/
+  mouse, not arbitrary process spawn).
+
+### Consequences
+
+- The model sees ``shell_run`` only when ``capacity_mode=full``
+  AND the platform actually has a shell backend.
+- A power user who wants ``sed -i`` must add ``sed`` to
+  ``shell_allowlist`` explicitly. We accept this friction.
+- The backend rejects ``ls | wc`` — the agent must call
+  ``shell_run("ls")`` and pipe in its own head. We accept this.
+- A timeout never crashes the MCP server; the model can recover.
+- Audit log records full argv, cwd, rc, dry_run flag, and
+  stdout/stderr *lengths* (not contents — keeps logs small and
+  avoids leaking secrets like environment dumps).
+
 ---
 
 ## ADR-0016 — Capacity hot-reload via MCP respawn, not in-process signal
