@@ -3,6 +3,29 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.1: notify.py shim over platform.notify
+
+- Phase A.1 of the multiplatform plan. Auditor (read-only) confirmed
+  ``notify.py`` was the cheapest leak to plug: bypassed the existing
+  ``platform.notify`` surface entirely, kept its own ``subprocess.run
+  (["notify-send", ...])`` 4 months after ``LibnotifyBackend`` was
+  wired. Rewrote it as a 12-line shim that respects ``settings.notify``
+  (gate that lives only here, not in the backend), delegates to
+  ``plat.notify.show(title, body, urgency)``, and swallows any
+  exception (best-effort contract preserved). Two call sites
+  (``pipeline.py``, ``cli.py``) keep their import unchanged.
+- Decided to **not** propagate the old ``-t 2500`` visualisation
+  timeout into ``LibnotifyBackend``: a daemon-default lifetime is
+  fine, and changing the backend belongs to a backend commit, not a
+  shim commit. If toasts feel sticky we revisit.
+- Verified: 346 tests still green, ruff + mypy clean, live smoke
+  (``python -c "from voice_opencode.notify import notify;
+  notify('voice-opencode', 'A.1 shim funcionando', 'low')"``)
+  produced the toast.
+- First commit of Phase A. Sets the pattern for the remaining steps:
+  one shim/backend per commit, suite green at each one, no behaviour
+  change observable from the consumer layer.
+
 ## 2026-05-18 — Pipeline lockfile + silent F9 drop
 
 - Smoke-test forensics: `logs/voice.log` showed two `paplay timed out`
