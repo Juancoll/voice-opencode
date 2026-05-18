@@ -123,6 +123,64 @@ sudo pacman -S zenity
 # rare enough that adding one is YAGNI.
 ```
 
+## Capacity modes — limit what opencode can do (Phase D)
+
+Three tiers control which MCP tools opencode sees. Switching is a
+single config write; the MCP server reads the setting at startup.
+
+| Mode        | What the model can do                                            | Tool count* |
+|-------------|------------------------------------------------------------------|-------------|
+| `read-only` | Observe only — list windows, capture screen, read clipboard, notify | 11        |
+| `assist`    | + drive UI: type, click, focus, move, dialogs, write clipboard   | 28          |
+| `full`      | + destructive: `close_window` (and future `run_shell`)            | 29          |
+
+\* on this host. Real count depends on which backend caps are wired.
+
+Default is **assist**. Change it:
+
+```bash
+voice config set capacity_mode read-only      # observe-only
+voice config set capacity_mode assist         # default
+voice config set capacity_mode full           # everything
+
+# Or one-shot for a single invocation:
+VOICE_CAPACITY_MODE=full ./voice mcp serve
+```
+
+After changing the mode, **restart the MCP server** so opencode
+re-reads the tool list:
+
+```bash
+systemctl --user restart opencode-serve     # or kill -HUP the mcp process
+```
+
+Verify what the model currently sees:
+
+```bash
+# Live count per mode (no MCP client needed):
+PYTHONPATH=src venv/bin/python -c "
+from voice_opencode import mcp_server
+srv = mcp_server.build_server()
+print(sorted(t.name for t in srv._tool_manager.list_tools()))
+"
+
+# Or from the model itself: it calls platform_info() which now returns
+# {platform, capabilities, capacity_mode}.
+```
+
+Audit trail — every MCP startup logs the active tier:
+
+```bash
+tail -n3 logs/voice.log
+# MCP server started (platform=linux-hyprland, capacity=assist, tools=28).
+```
+
+Mapping (tool → minimum tier) lives in
+``src/voice_opencode/capacity.py`` → ``TIER_BY_TOOL``. To re-tier a
+tool, edit that dict; no other change needed. Adding a new MCP tool
+without adding it to the dict means it defaults to ``full`` (hidden
+from read-only and assist) — that's by design, see ADR-0014.
+
 ## Switch voice
 
 ```bash

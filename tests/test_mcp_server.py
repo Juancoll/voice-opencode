@@ -98,3 +98,47 @@ def test_build_server_full_caps_registers_everything(monkeypatch):
     assert "clipboard_write" in names
     assert "sleep_ms" in names               # misc
     assert "platform_info" in names
+
+
+# ---------------------------------------------------------------------------
+# Capacity-mode filtering (Phase D)
+# ---------------------------------------------------------------------------
+def _build_with(monkeypatch, mode: str) -> set[str]:
+    from dataclasses import replace
+
+    from voice_opencode import config
+    monkeypatch.setattr(mcp_server.plat, "supported", lambda _cap: True)
+    monkeypatch.setattr(
+        config, "settings", replace(config.settings, capacity_mode=mode)
+    )
+    with patch("voice_opencode.mcp_server.agent.audit"):
+        srv = mcp_server.build_server()
+    return _registered(srv)
+
+
+def test_capacity_read_only_hides_acting_tools(monkeypatch):
+    names = _build_with(monkeypatch, "read-only")
+    # Read-only tools visible.
+    for must in ("list_windows", "capture_screen", "clipboard_read",
+                 "notify", "platform_info"):
+        assert must in names
+    # Acting tools hidden.
+    for hidden in ("type_text", "click_mouse", "clipboard_write",
+                   "focus_window", "ask_user", "close_window"):
+        assert hidden not in names, hidden
+
+
+def test_capacity_assist_hides_destructive_only(monkeypatch):
+    names = _build_with(monkeypatch, "assist")
+    for must in ("type_text", "click_mouse", "focus_window",
+                 "clipboard_write", "ask_user"):
+        assert must in names
+    # close_window is reserved for 'full'.
+    assert "close_window" not in names
+
+
+def test_capacity_full_exposes_everything(monkeypatch):
+    names = _build_with(monkeypatch, "full")
+    assert "close_window" in names
+    assert "type_text" in names
+    assert "list_windows" in names

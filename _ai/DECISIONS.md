@@ -5,6 +5,103 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0014 — Capacity modes: filter MCP tools at registration, not at invocation
+**Date:** 2026-05-18
+
+**Context.** Phase 3 wired 33 MCP tools that opencode can call without
+the user being in the loop. Some are pure observation (``list_windows``,
+``capture_screen``); some are reversible (``type_text``, ``focus_window``);
+one is destructive (``close_window``); Phase E will add the worst
+(``run_shell``). Different scenarios want different surfaces:
+
+* **Pair-programming** — model should observe only, never touch the desktop.
+* **Daily voice assistant** — the current default, can drive UI but not
+  close apps from under the user.
+* **Automation script** — the user delegates everything, including
+  ``close_window`` (and eventually ``run_shell``).
+
+Hard-coding the model's behaviour in the system prompt ("please don't
+close windows unless asked") is the worst of all worlds: it's
+unenforceable and it bloats the prompt. We need an enforced switch.
+
+**Decision.**
+
+1. **Three tiers, monotonic.** ``read-only`` ⊂ ``assist`` ⊂ ``full``.
+   Default is ``assist`` (matches Phase 3 behaviour minus
+   ``close_window``). Anything that isn't one of the three names falls
+   back to ``assist`` with a warning (fail-open on the existing
+   default, not surprise-locked).
+2. **Filter at registration, not at invocation.** A tool that's not
+   allowed under the current tier is **never registered** with FastMCP.
+   The model can't see it, can't call it, can't even know it exists.
+   The alternative (register everything, reject at call time) leaks
+   the tool surface and invites prompt-injection attacks that say
+   "ignore the policy".
+3. **The mapping is the contract.** ``capacity.TIER_BY_TOOL`` is a
+   flat dict, one line per tool. Adding a new MCP tool means adding
+   it there in the same commit. Tools missing from the dict default
+   to ``full`` (safe-by-default — a forgotten entry hides the tool
+   from the restricted modes rather than silently exposing it).
+4. **One combined gate.** ``mcp_server._expose(cap, tool_name)``
+   returns ``plat.supported(cap) and capacity.allows(tool_name)``.
+   The single helper means a consumer can't forget one half. The 25
+   ``if plat.supported(...):`` guards became ``if _expose(...):`` with
+   no other change.
+5. **The tool→tier policy is conservative.** Destructive operations
+   live in ``full`` only (``close_window`` today; ``run_shell``
+   tomorrow). Synthetic input (``type_text``, ``click_mouse``) stays
+   in ``assist`` because that's what makes assist useful — but the
+   user can opt out by switching to ``read-only`` when working on
+   something they don't want touched. We will revisit this if it bites.
+6. **Read settings dynamically.** ``capacity.current_mode()`` reads
+   ``config.settings.capacity_mode`` on every call (via
+   ``from . import config``, not ``from .config import settings``),
+   so ``config.reload()`` and test monkeypatches actually take effect.
+   Caching the value on import was tried first and silently broke
+   tests — a footgun worth a sentence in the ADR.
+7. **Audit visibility.** The active tier and exposed-tool count are
+   logged to ``logs/voice.log`` on every MCP server startup; the
+   ``platform_info`` tool also returns ``capacity_mode`` so the model
+   can describe its own bounds.
+
+**Alternatives considered.**
+
+* *One enable/disable flag per tool*. 33 booleans → tray menu hell and
+  user can't reason about it. The three-tier abstraction is the right
+  granularity for a voice assistant.
+* *Per-call policy hooks* (let the user run a Python predicate per
+  call). Powerful but over-engineered; nobody will write it.
+* *Per-tool confirmation dialog*. Tried mentally: every ``focus_window``
+  would interrupt the user. Confirmation is reserved for ``full``-tier
+  destructive tools, and even then it's the model's job to call
+  ``ask_confirm`` first (a soft contract documented in the tool
+  description, not enforced).
+* *Reject at invocation time* (register all, return ``"error: blocked
+  by capacity mode"``). Tool surface leaks; invites the model to
+  retry with a different framing; wastes the round-trip. Rejected.
+* *Sandboxes / namespaces per tier*. Overkill — we're not running
+  untrusted code, just deciding which capabilities to advertise.
+
+**Consequences.**
+
+* Switching modes requires restarting ``opencode serve`` (FastMCP
+  registers tools once at startup). That's fine — mode changes are
+  rare. The tray can show the current mode and "restart MCP" action
+  in a future commit.
+* ``platform_info`` now returns ``capacity_mode`` — a wire-format
+  addition (additive, no breakage). AGENTS.md guidance on
+  "anything that changes the wire format" doesn't strictly apply
+  because nothing reads ``platform_info`` programmatically yet.
+* CLI surface unchanged: ``voice config set capacity_mode full`` (and
+  ``$VOICE_CAPACITY_MODE``) already worked thanks to the generic
+  config CLI. No new commands.
+* Adding Phase E's ``run_shell`` is now: implement the tool, add
+  ``"run_shell": "full"`` to ``TIER_BY_TOOL``, done.
+* New skill ``_ai/SKILLS/add-mcp-tool.md`` (Phase 3 had the rough
+  recipe; Phase D forces us to formalise the tier-mapping step).
+
+---
+
 ## ADR-0013 — Dialog backends: shared exit-code contract, kdialog preferred over zenity
 **Date:** 2026-05-18
 

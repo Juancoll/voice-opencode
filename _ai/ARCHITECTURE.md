@@ -140,6 +140,7 @@ Lower modules have no awareness of higher ones. Imports flow downward only.
                         ├── mcp_server.py ── platform/
                         ├── desktop.py ─────────┘   (shim)
                         ├── agent.py
+                        ├── capacity.py
                         ├── config.py
                         ├── notify.py
                         ├── logging.py
@@ -197,6 +198,32 @@ Settings of note:
 * ``platform_override`` — force a specific backend wiring (default: auto).
 * ``capacity_mode`` — agent capability filter; ``"assist"`` by default.
   Phase D will use this to filter MCP tool registration further.
+
+## Capacity modes (Phase D)
+
+Orthogonal to the capability filter: ``capacity.py`` decides which MCP
+tools are *exposed* based on ``settings.capacity_mode`` (``read-only``
+/ ``assist`` (default) / ``full``). Tools that aren't allowed by the
+active tier are **not registered** with the FastMCP server — the model
+literally cannot see them, so there's nothing to bypass.
+
+The mapping (tool → minimum tier) lives in ``capacity.TIER_BY_TOOL``
+and is **the contract**: adding a new MCP tool means adding it to that
+dict in the same change. Tools not in the dict default to ``full``
+(safe-by-default: a forgotten tool is hidden from the restricted modes
+rather than silently leaked).
+
+``mcp_server._expose(capability, tool_name)`` combines both filters:
+``plat.supported(capability) and capacity.allows(tool_name)``. The
+single helper means consumers cannot forget one half of the check.
+
+The active tier and exposed tool count are logged to ``logs/voice.log``
+on every MCP server startup, so audit trails always state what the
+model could see at the time. ``platform_info`` (the tool the model uses
+to discover itself) now also returns ``capacity_mode`` so the model
+knows its own bounds without re-querying.
+
+See ADR-0014 for the rationale and trade-offs.
 
 ## Extension points
 

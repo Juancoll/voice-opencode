@@ -12,6 +12,7 @@ Read the relevant skill before starting that kind of work.
 - [`debug-tray.md`](./debug-tray.md) — diagnose a missing/broken tray icon
 - [`debug-pipeline.md`](./debug-pipeline.md) — diagnose STT/opencode/TTS failures
 - [`build-mcp-tool.md`](./build-mcp-tool.md) — Phase 3 — expose a desktop tool to opencode
+- [`add-mcp-tool.md`](./add-mcp-tool.md) — operational checklist for adding an MCP tool (supersedes build-mcp-tool, includes capacity tiering from ADR-0014)
 - [`build-dialog-backend.md`](./build-dialog-backend.md) — add a new dialog backend (rofi/yad/…) obeying ADR-0013
 
 ## When in doubt

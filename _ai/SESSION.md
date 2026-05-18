@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase C.
+Last updated: 2026-05-18 — end of Phase D.
 
 ---
 
@@ -56,15 +56,43 @@ published on GitHub.
 | A     | Windows + workspaces (CLI + tray)  | ✅ done       |
 | B     | Clipboard (read/write + tools/CLI) | ✅ done       |
 | C     | Notify / ask_user / confirm (kdialog→zenity) | ✅ done |
-| D     | Capacity modes (read-only/assist/full) filtering MCP tools | ⏭ next |
-| H     | Audio / media (wpctl + playerctl backends) | pending  |
+| D     | Capacity modes (read-only/assist/full) filtering MCP tools | ✅ done |
+| H     | Audio / media (wpctl + playerctl backends) | ⏭ next   |
 | I     | Apps (launch_app, list windows enriched) | pending    |
 | J     | Audit viewer + kill switch en tray | pending       |
 | E     | run_shell with safety rails        | pending       |
 | F     | OCR find_text (Tesseract)          | pending       |
 | G     | Memory (Markdown plano)            | pending       |
 
-## What just shipped (Phase C, this commit)
+## What just shipped (Phase D, this commit)
+
+- New module `capacity.py`: `TIER_BY_TOOL` maps every MCP tool to a
+  tier (`read-only` / `assist` / `full`); `allows(tool, mode)`,
+  `current_mode()`, `tools_for(mode)`. Tiers are monotonic. Unknown
+  tools default to `full` (safe-by-default — forgotten entries hide
+  from restricted modes, never leak). Unknown mode strings fall back
+  to `assist` with a warning. See ADR-0014.
+- `mcp_server.py`: new `_expose(cap, tool_name)` helper. All 25
+  `if plat.supported(cap.X):` guards became `if _expose(cap.X,
+  "tool_name"):`. `sleep_ms` / `platform_info` also gated (both in
+  read-only tier). `platform_info` return adds `capacity_mode` so
+  the model can describe its own bounds. `serve()` logs active mode
+  and exposed tool count on startup.
+- Footgun fix: `capacity.py` reads `config.settings.capacity_mode`
+  dynamically via `from . import config`, not at import time —
+  caching silently broke monkeypatched tests.
+- Tool→tier policy (conservative): `close_window` lives in `full`
+  only. Phase E's `run_shell` will join it. Everything else
+  (type/click/clipboard_write/dialogs/wm-non-destructive) is `assist`.
+- Live counts (current backend wiring on this host): read-only → 11,
+  assist (default) → 28, full → 29.
+- 137 tests verde (eran 126): +8 in `test_capacity.py`, +3 in
+  `test_mcp_server.py`.
+- No CLI change — `voice config set capacity_mode <mode>` and
+  `$VOICE_CAPACITY_MODE` already worked via the generic config CLI.
+- ruff + mypy verde (52 source files, +1: `capacity.py`).
+
+## Previously shipped (Phase C)
 
 - `backends/linux_dialog_kde/kdialog_backend.py`: real implementation
   (was a stub). `--yesno` / `--inputbox` / `--menu` with the shared
@@ -113,21 +141,19 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase D — Capacity modes.** En `mcp_server.py` filtrar
-   herramientas según `settings.capacity_mode`:
-   - `read-only`: sólo `list_*`, `find_*`, `active_*`, `capture_*`,
-     `clipboard_read`, `platform_info`, `notify` (no input from user).
-   - `assist` (default): + write WM, type/click confirmados, dialogs
-     completos (`ask_confirm`/`ask_user`/`ask_choice`), `clipboard_write`.
-   - `full`: + `run_shell` (Phase E), todo.
-   Plan: añadir `_capacity_allows(tool_name)` y envolver cada
-   `_register_*` con un filtro. Tests deben cubrir las 3 modes.
-2. **Phase H — Audio / media.** Implementar
+1. **Phase H — Audio / media.** Implementar
    `linux_audio_pipewire/wpctl_backend.py` + `playerctl_backend.py`
    (stubs). Capabilities `audio.*` + `media.*`. CLI `voice audio
    {get|set|mute}` / `voice media {play|next|prev|status}`. MCP tools.
-3. **Phase I — Apps.** `launch_app` (gtk-launch / xdg-open),
-   `list_windows` enriched con icono/app-id.
+   No olvidar añadir cada tool nuevo a `capacity.TIER_BY_TOOL` —
+   los read-only en read-only (audio.get/media.status), los acting
+   en assist (audio.set/mute, media.play/next/prev).
+2. **Phase I — Apps.** `launch_app` (gtk-launch / xdg-open),
+   `list_windows` enriched con icono/app-id. `launch_app` probablemente
+   `assist` (abre cosa nueva, reversible cerrándola).
+3. **Phase J — Audit viewer + kill switch en tray.** Submenu "Agente"
+   con: ver `logs/agent.log` últimos N, toggle capacity_mode (con
+   restart MCP automático), pause/resume.
 
 ## Critical context to keep in your head
 
@@ -135,8 +161,8 @@ published on GitHub.
   `gist, read:org, repo, workflow`).
 - Repo público: <https://github.com/Juancoll/voice-opencode>, branch
   `main`. Commits previos: `40a41db`, `9d231ac`, `69e82c2`, `63f0755`,
-  `f95ad2f`, `30fc0cd` (Phase B), + el commit Phase C que estás
-  creando ahora.
+  `f95ad2f`, `30fc0cd` (Phase B), `6c53357` (Phase C), + el commit
+  Phase D que estás creando ahora.
 - Wrapper `./voice` exporta `PYTHONPATH=src` antes de
   `python -m voice_opencode`. Activa el venv local.
 - ydotool socket en `/run/user/1000/.ydotool_socket`.
@@ -173,6 +199,13 @@ published on GitHub.
   rc 1 → cancel/None, other → BackendError); kdialog preferred,
   zenity fallback; notify as a separate Protocol; MCP tools translate
   Python `None` → `""` and `True`/`False` → `"yes"`/`"no"`.
+- ADR-0014: Capacity modes filter MCP tools at *registration time*,
+  not at invocation. Three monotonic tiers (read-only ⊂ assist ⊂
+  full). `TIER_BY_TOOL` is the contract: unknown tools default to
+  `full` (safe-by-default — forgotten entries hide, never leak).
+  `_expose(cap, name)` combines capability + capacity into one gate.
+  Reading `config.settings` dynamically (not at import) avoids a
+  caching footgun.
 
 ## Environment variables (optional)
 
@@ -188,14 +221,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 126 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 137 passing
 venv/bin/ruff check src tests                # all clean
 venv/bin/mypy src/voice_opencode             # no issues, 51 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase D.
+If any of those fail, fix them **before** starting Phase H.
 
 ## Files to read first when resuming
 

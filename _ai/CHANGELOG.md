@@ -5,6 +5,43 @@ This is intentionally more granular than `_ai/DECISIONS.md`.
 
 ---
 
+## 2026-05-18 — Phase D: capacity modes (read-only / assist / full filter for MCP tools)
+
+- New module ``capacity.py``: maps every MCP tool to a tier in
+  ``TIER_BY_TOOL`` and exposes ``current_mode()`` / ``allows(tool)`` /
+  ``tools_for(mode)``. Tiers are monotonic (read-only ⊂ assist ⊂ full).
+  Unknown tools default to ``full`` (safe-by-default — a forgotten
+  entry hides the tool from restricted modes rather than leaking it).
+  Unknown mode strings fall back to ``assist`` with a warning.
+  See ADR-0014.
+- ``mcp_server.py``: new ``_expose(cap, tool_name)`` helper combines
+  the capability check and the capacity check into one call. All 25
+  ``if plat.supported(cap.X):`` guards became ``if _expose(cap.X,
+  "tool_name"):``. ``sleep_ms`` and ``platform_info`` (previously
+  always-on) are now also gated, both belong to ``read-only`` so
+  they remain visible in every mode. ``platform_info`` return value
+  gained a ``capacity_mode`` field so the model can describe its
+  own bounds without calling extra tools. ``serve()`` logs the
+  active mode and exposed tool count on startup.
+- ``capacity.py`` reads ``config.settings.capacity_mode`` dynamically
+  (``from . import config`` then ``config.settings.…``) — caching
+  the value at import time silently broke tests, written up in
+  ADR-0014 as a footgun warning.
+- Smoke live count (with current backend wiring): read-only → 11
+  tools, assist (default) → 28, full → 29 (the extra one is
+  ``close_window``). Sole destructive tool in this phase; Phase E's
+  ``run_shell`` will be the second.
+- 137 tests verde (eran 126): +8 in ``test_capacity.py`` covering
+  tier mapping totality, per-mode tool sets, unknown-tool default,
+  unknown-mode fallback, explicit-mode arg override, monotonicity;
+  +3 in ``test_mcp_server.py`` covering read-only / assist / full
+  registration shapes with all capabilities mocked-on.
+- No CLI change needed — ``voice config set capacity_mode full`` and
+  ``$VOICE_CAPACITY_MODE`` already worked via the generic config CLI.
+- ruff + mypy verde (52 source files, +1: ``capacity.py``).
+
+---
+
 ## 2026-05-18 — Phase C: dialogs + notifications (kdialog, zenity, MCP, CLI)
 
 - Phase 0 had wired `LibnotifyBackend` (notify-send) and stub

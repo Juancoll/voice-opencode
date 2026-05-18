@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import agent
+from . import agent, capacity
 from . import platform as plat
 from .logging import log
 from .paths import SCREENSHOT_FILE
@@ -91,6 +91,11 @@ def _err(e: Exception) -> str:
     return f"error: {e}"
 
 
+def _expose(capability: str, tool_name: str) -> bool:
+    """Tool is registered iff backend supports it AND capacity tier allows it."""
+    return plat.supported(capability) and capacity.allows(tool_name)
+
+
 # ---------------------------------------------------------------------------
 # Server construction
 # ---------------------------------------------------------------------------
@@ -124,7 +129,7 @@ def build_server() -> Any:
 # Tool groups
 # ---------------------------------------------------------------------------
 def _register_input(mcp: Any) -> None:
-    if plat.supported(cap.INPUT_TYPE_TEXT):
+    if _expose(cap.INPUT_TYPE_TEXT, "type_text"):
         @mcp.tool(description="Type literal text into the focused window.")
         def type_text(text: str, delay_ms: int = 12) -> str:
             if (e := _guard("type_text", {"len": len(text), "delay_ms": delay_ms})):
@@ -137,7 +142,7 @@ def _register_input(mcp: Any) -> None:
             agent.audit("type_text", {"len": len(text)})
             return f"typed {len(text)} chars"
 
-    if plat.supported(cap.INPUT_PRESS_KEY):
+    if _expose(cap.INPUT_PRESS_KEY, "press_key"):
         @mcp.tool(
             description=(
                 "Press a key or combination, e.g. 'Tab', 'Return', 'ctrl+a'. "
@@ -158,7 +163,7 @@ def _register_input(mcp: Any) -> None:
             agent.audit("press_key", {"combo": combo})
             return f"pressed {combo}"
 
-    if plat.supported(cap.INPUT_MOVE_MOUSE):
+    if _expose(cap.INPUT_MOVE_MOUSE, "move_mouse"):
         @mcp.tool(description="Move the mouse cursor to absolute (x, y).")
         def move_mouse(x: int, y: int) -> str:
             if (e := _guard("move_mouse", {"x": x, "y": y})):
@@ -171,7 +176,7 @@ def _register_input(mcp: Any) -> None:
             agent.audit("move_mouse", {"x": x, "y": y})
             return f"moved to ({x},{y})"
 
-    if plat.supported(cap.INPUT_CLICK_MOUSE):
+    if _expose(cap.INPUT_CLICK_MOUSE, "click_mouse"):
         @mcp.tool(
             description=(
                 "Click a mouse button. Optionally move to (x, y) first. "
@@ -196,7 +201,7 @@ def _register_input(mcp: Any) -> None:
             return (f"clicked {button} at ({x},{y})"
                     if x is not None else f"clicked {button}")
 
-    if plat.supported(cap.INPUT_SCROLL_MOUSE):
+    if _expose(cap.INPUT_SCROLL_MOUSE, "scroll_mouse"):
         @mcp.tool(description="Scroll the mouse wheel by (dx, dy) ticks.")
         def scroll_mouse(dx: int = 0, dy: int = 0) -> str:
             if (e := _guard("scroll_mouse", {"dx": dx, "dy": dy})):
@@ -211,7 +216,7 @@ def _register_input(mcp: Any) -> None:
 
 
 def _register_screen(mcp: Any) -> None:
-    if plat.supported(cap.SCREEN_CAPTURE_MONITOR):
+    if _expose(cap.SCREEN_CAPTURE_MONITOR, "capture_screen"):
         @mcp.tool(
             description=(
                 "Capture a screenshot. scope ∈ {'monitor', 'window', 'all', "
@@ -248,7 +253,7 @@ def _register_screen(mcp: Any) -> None:
                         {"scope": scope, "path": str(p), "bytes": size})
             return {"path": str(p), "bytes": size}
 
-    if plat.supported(cap.SCREEN_LIST_MONITORS):
+    if _expose(cap.SCREEN_LIST_MONITORS, "list_monitors"):
         @mcp.tool(description="List all monitors with name, geometry, focus state.")
         def list_monitors() -> list[dict[str, Any]]:
             if (e := _guard("list_monitors", {})):
@@ -262,7 +267,7 @@ def _register_screen(mcp: Any) -> None:
 
 
 def _register_windows(mcp: Any) -> None:
-    if plat.supported(cap.WM_LIST_WINDOWS):
+    if _expose(cap.WM_LIST_WINDOWS, "list_windows"):
         @mcp.tool(description="List all top-level windows (class, title, geometry).")
         def list_windows() -> list[dict[str, Any]]:
             if (e := _guard("list_windows", {})):
@@ -274,7 +279,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("list_windows", {"count": len(wins)})
             return wins
 
-    if plat.supported(cap.WM_FIND_WINDOWS):
+    if _expose(cap.WM_FIND_WINDOWS, "find_windows"):
         @mcp.tool(
             description=(
                 "Find windows whose class or title contains `needle` "
@@ -292,7 +297,7 @@ def _register_windows(mcp: Any) -> None:
                         {"needle": needle, "count": len(wins)})
             return [w.to_dict() for w in wins]
 
-    if plat.supported(cap.WM_ACTIVE_WINDOW):
+    if _expose(cap.WM_ACTIVE_WINDOW, "focused_window"):
         @mcp.tool(description="Return the currently focused window.")
         def focused_window() -> dict[str, Any]:
             if (e := _guard("focused_window", {})):
@@ -304,7 +309,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("focused_window", {"id": w.id if w else None})
             return w.to_dict() if w else {}
 
-    if plat.supported(cap.WM_LIST_WORKSPACES):
+    if _expose(cap.WM_LIST_WORKSPACES, "list_workspaces"):
         @mcp.tool(description="List all workspaces / virtual desktops.")
         def list_workspaces() -> list[dict[str, Any]]:
             if (e := _guard("list_workspaces", {})):
@@ -316,7 +321,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("list_workspaces", {"count": len(ws)})
             return ws
 
-    if plat.supported(cap.WM_ACTIVE_WORKSPACE):
+    if _expose(cap.WM_ACTIVE_WORKSPACE, "active_workspace"):
         @mcp.tool(description="Return the currently active workspace.")
         def active_workspace() -> dict[str, Any]:
             if (e := _guard("active_workspace", {})):
@@ -328,7 +333,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("active_workspace", {"id": ws.id if ws else None})
             return ws.to_dict() if ws else {}
 
-    if plat.supported(cap.WM_FOCUS_WINDOW):
+    if _expose(cap.WM_FOCUS_WINDOW, "focus_window"):
         @mcp.tool(
             description=(
                 "Focus a window. `target` is a backend id or a "
@@ -346,7 +351,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("focus_window", {"target": target})
             return f"focused {target}"
 
-    if plat.supported(cap.WM_CLOSE_WINDOW):
+    if _expose(cap.WM_CLOSE_WINDOW, "close_window"):
         @mcp.tool(description="Politely close a window (id or class/title substring).")
         def close_window(target: str) -> str:
             if (e := _guard("close_window", {"target": target})):
@@ -359,7 +364,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("close_window", {"target": target})
             return f"closed {target}"
 
-    if plat.supported(cap.WM_MOVE_WINDOW):
+    if _expose(cap.WM_MOVE_WINDOW, "move_window"):
         @mcp.tool(description="Move a (floating) window to absolute (x, y).")
         def move_window(target: str, x: int, y: int) -> str:
             if (e := _guard("move_window", {"target": target, "x": x, "y": y})):
@@ -372,7 +377,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("move_window", {"target": target, "x": x, "y": y})
             return f"moved {target} to ({x},{y})"
 
-    if plat.supported(cap.WM_RESIZE_WINDOW):
+    if _expose(cap.WM_RESIZE_WINDOW, "resize_window"):
         @mcp.tool(description="Resize a (floating) window to absolute (w, h).")
         def resize_window(target: str, w: int, h: int) -> str:
             if w <= 0 or h <= 0:
@@ -387,7 +392,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("resize_window", {"target": target, "w": w, "h": h})
             return f"resized {target} to {w}x{h}"
 
-    if plat.supported(cap.WM_TOGGLE_FLOATING):
+    if _expose(cap.WM_TOGGLE_FLOATING, "toggle_floating"):
         @mcp.tool(description="Toggle floating mode for a window.")
         def toggle_floating(target: str) -> str:
             if (e := _guard("toggle_floating", {"target": target})):
@@ -400,7 +405,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("toggle_floating", {"target": target})
             return f"toggled floating {target}"
 
-    if plat.supported(cap.WM_TOGGLE_FULLSCREEN):
+    if _expose(cap.WM_TOGGLE_FULLSCREEN, "toggle_fullscreen"):
         @mcp.tool(
             description=(
                 "Toggle fullscreen on `target` (or the active window if "
@@ -418,7 +423,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("toggle_fullscreen", {"target": target})
             return f"toggled fullscreen {target or '<active>'}"
 
-    if plat.supported(cap.WM_SWITCH_WORKSPACE):
+    if _expose(cap.WM_SWITCH_WORKSPACE, "switch_workspace"):
         @mcp.tool(description="Switch to workspace by id or name.")
         def switch_workspace(workspace: str) -> str:
             if (e := _guard("switch_workspace", {"workspace": workspace})):
@@ -431,7 +436,7 @@ def _register_windows(mcp: Any) -> None:
             agent.audit("switch_workspace", {"workspace": workspace})
             return f"switched to workspace {workspace}"
 
-    if plat.supported(cap.WM_MOVE_TO_WORKSPACE):
+    if _expose(cap.WM_MOVE_TO_WORKSPACE, "move_window_to_workspace"):
         @mcp.tool(description="Move `target` window to `workspace` (silent).")
         def move_window_to_workspace(target: str, workspace: str) -> str:
             if (e := _guard("move_window_to_workspace",
@@ -446,7 +451,7 @@ def _register_windows(mcp: Any) -> None:
                         {"target": target, "workspace": workspace})
             return f"moved {target} to workspace {workspace}"
 
-    if plat.supported(cap.WM_SEND_WS_TO_MONITOR):
+    if _expose(cap.WM_SEND_WS_TO_MONITOR, "send_workspace_to_monitor"):
         @mcp.tool(
             description=(
                 "Send the active workspace to another monitor. "
@@ -466,7 +471,7 @@ def _register_windows(mcp: Any) -> None:
 
 
 def _register_clipboard(mcp: Any) -> None:
-    if plat.supported(cap.CLIPBOARD_READ):
+    if _expose(cap.CLIPBOARD_READ, "clipboard_read"):
         @mcp.tool(description="Read the system clipboard as text.")
         def clipboard_read() -> str:
             if (e := _guard("clipboard_read", {})):
@@ -478,7 +483,7 @@ def _register_clipboard(mcp: Any) -> None:
             agent.audit("clipboard_read", {"len": len(text)})
             return text
 
-    if plat.supported(cap.CLIPBOARD_WRITE):
+    if _expose(cap.CLIPBOARD_WRITE, "clipboard_write"):
         @mcp.tool(description="Write text to the system clipboard.")
         def clipboard_write(text: str) -> str:
             if (e := _guard("clipboard_write", {"len": len(text)})):
@@ -495,7 +500,7 @@ def _register_clipboard(mcp: Any) -> None:
 def _register_dialogs(mcp: Any) -> None:
     """Notifications + blocking dialogs (notify-send + kdialog/zenity)."""
 
-    if plat.supported(cap.NOTIFY_SHOW):
+    if _expose(cap.NOTIFY_SHOW, "notify"):
         @mcp.tool(description=(
             "Show a desktop notification (non-blocking). "
             "Use for status updates the user can ignore."
@@ -510,7 +515,7 @@ def _register_dialogs(mcp: Any) -> None:
             agent.audit("notify", {"title": title[:80], "urgency": urgency})
             return "notified"
 
-    if plat.supported(cap.DIALOG_CONFIRM):
+    if _expose(cap.DIALOG_CONFIRM, "ask_confirm"):
         @mcp.tool(description=(
             "Ask the user a Yes/No question via a modal dialog. "
             "BLOCKS until the user answers. Use sparingly — every call "
@@ -527,7 +532,7 @@ def _register_dialogs(mcp: Any) -> None:
             agent.audit("ask_confirm", {"answer": "yes" if ok else "no"})
             return "yes" if ok else "no"
 
-    if plat.supported(cap.DIALOG_ASK_TEXT):
+    if _expose(cap.DIALOG_ASK_TEXT, "ask_user"):
         @mcp.tool(description=(
             "Ask the user for a line of text via a modal input dialog. "
             "BLOCKS until the user submits or cancels. "
@@ -544,7 +549,7 @@ def _register_dialogs(mcp: Any) -> None:
             agent.audit("ask_user", {"cancelled": ans is None, "len": len(ans or "")})
             return ans if ans is not None else ""
 
-    if plat.supported(cap.DIALOG_ASK_CHOICE):
+    if _expose(cap.DIALOG_ASK_CHOICE, "ask_choice"):
         @mcp.tool(description=(
             "Ask the user to pick one option from a list via a modal menu. "
             "BLOCKS until the user picks or cancels. "
@@ -565,19 +570,22 @@ def _register_dialogs(mcp: Any) -> None:
 
 
 def _register_misc(mcp: Any) -> None:
-    @mcp.tool(description="Sleep for ms milliseconds. Use to let UIs settle. Max 5000.")
-    def sleep_ms(ms: int) -> str:
-        ms = max(0, min(ms, 5000))
-        time.sleep(ms / 1000.0)
-        agent.audit("sleep_ms", {"ms": ms})
-        return f"slept {ms}ms"
+    if capacity.allows("sleep_ms"):
+        @mcp.tool(description="Sleep for ms milliseconds. Use to let UIs settle. Max 5000.")
+        def sleep_ms(ms: int) -> str:
+            ms = max(0, min(ms, 5000))
+            time.sleep(ms / 1000.0)
+            agent.audit("sleep_ms", {"ms": ms})
+            return f"slept {ms}ms"
 
-    @mcp.tool(description="Report the active platform and the wired backend capabilities.")
-    def platform_info() -> dict[str, Any]:
-        return {
-            "platform": plat.active_platform,
-            "capabilities": sorted(plat.all_capabilities()),
-        }
+    if capacity.allows("platform_info"):
+        @mcp.tool(description="Report the active platform and the wired backend capabilities.")
+        def platform_info() -> dict[str, Any]:
+            return {
+                "platform": plat.active_platform,
+                "capabilities": sorted(plat.all_capabilities()),
+                "capacity_mode": capacity.current_mode(),
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +593,10 @@ def _register_misc(mcp: Any) -> None:
 # ---------------------------------------------------------------------------
 def serve() -> None:
     """Run the MCP server over stdio."""
-    log(f"MCP server started (platform={plat.active_platform}).")
+    mode = capacity.current_mode()
+    exposed = sorted(capacity.tools_for(mode))
+    log(f"MCP server started (platform={plat.active_platform}, "
+        f"capacity={mode}, tools={len(exposed)}).")
     try:
         build_server().run(transport="stdio")
     finally:
