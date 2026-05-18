@@ -3,6 +3,34 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.6: cross-platform runtime / state / config dirs in paths.py
+
+- Phase A.6: introduces three OS-aware helpers in ``paths.py`` —
+  ``runtime_dir()``, ``state_dir()`` and ``config_dir()`` — that
+  branch on ``sys.platform``. Linux honours XDG (``XDG_RUNTIME_DIR``,
+  ``XDG_STATE_HOME``, ``XDG_CONFIG_HOME`` with sensible fallbacks).
+  Windows uses ``%LOCALAPPDATA%\\voice-opencode\\runtime`` for
+  runtime/state and ``%APPDATA%\\voice-opencode`` for config (the
+  Windows equivalents — there is no tmpfs on Windows).
+- ``STATE_DIR`` now derives from ``runtime_dir()`` so the OS branch
+  happens in exactly one place. The 79+ existing call sites that
+  import module-level constants (``STATE_DIR``, ``MODELS_DIR``,
+  ``REC_PID_FILE``, etc.) stay untouched — those constants are
+  kept as compatibility shims around the new helpers.
+- ``CONFIG_FILE`` deliberately still points at the repo (not
+  ``config_dir()``) to avoid breaking existing installs. The
+  helper is exposed now so Phase B/C migrations can move user
+  config out of the source tree without an API churn.
+- New ``tests/test_paths.py`` (16 cases): Linux branch reads
+  XDG vars and falls back correctly; Windows branch simulated
+  by patching ``sys.platform`` reads ``LOCALAPPDATA`` /
+  ``APPDATA`` (with ``Path.home()`` fallback); module constants
+  retain the expected shape; ``ensure_dirs`` is idempotent and
+  creates missing dirs.
+- Verified: 406 tests (+16), ruff + mypy clean. No behaviour
+  change on Linux — every constant resolves to the exact same
+  path it did before this commit on this host.
+
 ## 2026-05-19 — A.5: STTBackend + WhisperCppSTTBackend; stt.py is a shim
 
 - Phase A.5: moves the ``whisper-cli`` invocation out of
