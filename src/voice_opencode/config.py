@@ -65,6 +65,12 @@ class Settings:
         r"python3?", r"node",
     )
     shell_timeout_s: float = 10.0
+    # OCR (Phase F): Tesseract languages tried together via "spa+eng"
+    # syntax; install matching `tesseract-data-*` packages first. The
+    # min-confidence filter (0-100 Tesseract scale) drops noisy words
+    # before substring matching so search results stay precise.
+    ocr_languages: tuple[str, ...] = ("spa", "eng")
+    ocr_min_confidence: float = 50.0
 
     @property
     def opencode_url(self) -> str:

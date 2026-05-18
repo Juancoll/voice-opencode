@@ -57,6 +57,8 @@ TIER_BY_TOOL: Final[dict[str, Tier]] = {
     "media_status":      "read-only",
     "apps_list_installed": "read-only",
     "apps_list_running":   "read-only",
+    "screen_find_text":    "read-only",
+    "ocr_find_text_in_file": "read-only",
     # --- assist (reversible / interactive) ---
     "type_text":                 "assist",
     "press_key":                 "assist",

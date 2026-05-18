@@ -22,7 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from .types import Monitor, Window, Workspace
+from .types import Monitor, OcrMatch, Window, Workspace
 
 
 class NotSupportedError(RuntimeError):
@@ -221,3 +221,56 @@ class ShellBackend(Protocol):
         timeout: float = 30.0,
         dry_run: bool = True,
     ) -> dict[str, Any]: ...                          # {rc, stdout, stderr, dry_run}
+
+
+# ---------------------------------------------------------------------------
+# OCR
+# ---------------------------------------------------------------------------
+@runtime_checkable
+class OCRBackend(Protocol):
+    """Optical character recognition on a raster image.
+
+    Intentionally decoupled from ``ScreenBackend``: a backend may be
+    present without the other. The caller is responsible for producing
+    the image (typically via ``screen.capture_*``). This keeps OCR
+    composable — it works on any PNG, not just screenshots.
+
+    Higher-level convenience ("find this text on screen *right now*")
+    lives in the MCP server / CLI as a thin composition of
+    ``screen.capture_monitor`` + ``ocr.find_text``.
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
+
+    def find_text(
+        self,
+        image_path: Path,
+        needle: str,
+        languages: tuple[str, ...] | None = None,
+        min_confidence: float = 50.0,
+    ) -> list[OcrMatch]:
+        """Find every occurrence of ``needle`` in ``image_path``.
+
+        - Case-insensitive substring match on the joined text of one or
+          more consecutive words on the same OCR line.
+        - ``languages`` overrides the configured default
+          (e.g. ``("spa", "eng")``).
+        - Words below ``min_confidence`` (0-100, Tesseract scale) are
+          dropped before matching.
+        - Returns matches in reading order (top-to-bottom, left-to-right
+          within a line). Empty list if nothing matches.
+        """
+        ...
+
+    def dump_text(
+        self,
+        image_path: Path,
+        languages: tuple[str, ...] | None = None,
+        min_confidence: float = 50.0,
+    ) -> list[OcrMatch]:
+        """Return every detected word with bbox + confidence.
+
+        Same as ``find_text`` with an empty needle: useful for debugging
+        and for the agent when it wants a screen reader-style dump.
+        """
+        ...

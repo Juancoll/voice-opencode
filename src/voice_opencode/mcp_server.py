@@ -124,6 +124,7 @@ def build_server() -> Any:
     _register_media(mcp)
     _register_apps(mcp)
     _register_shell(mcp)
+    _register_ocr(mcp)
     _register_misc(mcp)
 
     return mcp
@@ -817,6 +818,98 @@ def _register_shell(mcp: Any) -> None:
                 "stderr_len": len(r.get("stderr", "")),
             })
             return r
+
+
+def _register_ocr(mcp: Any) -> None:
+    """OCR on a captured screen region or arbitrary PNG (Phase F).
+
+    Two tools, both read-only:
+
+    * ``screen_find_text(needle, region=None)`` — convenience that
+      captures (focused monitor or region) and OCRs in one call.
+      This is the composed helper alluded to in ADR-0018.
+    * ``ocr_find_text_in_file(path, needle)`` — OCR a PNG the agent
+      already has (e.g. a previous screenshot it cached). Lets the
+      agent reuse pixels without re-capturing.
+
+    Both return ``[{text, rect:{x,y,w,h}, confidence}]`` in reading
+    order, empty list when nothing matches.
+    """
+
+    if _expose(cap.OCR_FIND_TEXT, "screen_find_text"):
+        @mcp.tool(description=(
+            "Capture the focused monitor (or a region) and find every "
+            "occurrence of `needle` on screen via OCR. Returns a list "
+            "of {text, rect, confidence} in reading order; empty list "
+            "if nothing matches. `region` is an optional [x,y,w,h] in "
+            "screen pixels — much faster than a full 4K capture. "
+            "Bounding boxes are returned in screen coordinates (i.e. "
+            "shifted by the region offset when a region is used)."
+        ))
+        def screen_find_text(
+            needle: str,
+            region: list[int] | None = None,
+        ) -> list[dict[str, Any]]:
+            if (e := _guard("screen_find_text",
+                            {"needle": needle, "region": region})):
+                return [{"error": e}]
+            import tempfile
+            from pathlib import Path as _P
+            tf = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            png = _P(tf.name)
+            tf.close()
+            try:
+                if region:
+                    if len(region) != 4:
+                        return [{"error": "region must be [x,y,w,h]"}]
+                    plat.screen.capture_region(png, *region)
+                    ox, oy = region[0], region[1]
+                else:
+                    plat.screen.capture_monitor(png)
+                    ox, oy = 0, 0
+                matches = plat.ocr.find_text(png, needle)
+            except (BackendError, NotSupportedError) as exc:
+                agent.audit("screen_find_text",
+                            {"needle": needle, "region": region}, str(exc))
+                return [{"error": str(exc)}]
+            finally:
+                png.unlink(missing_ok=True)
+            out = []
+            for m in matches:
+                d = m.to_dict()
+                d["rect"]["x"] += ox
+                d["rect"]["y"] += oy
+                out.append(d)
+            agent.audit("screen_find_text", {
+                "needle": needle, "region": region, "matches": len(out),
+            })
+            return out
+
+    if _expose(cap.OCR_FIND_TEXT, "ocr_find_text_in_file"):
+        @mcp.tool(description=(
+            "OCR an existing PNG file on disk and return every match "
+            "of `needle`. Useful when the agent already has a "
+            "screenshot or a downloaded image and doesn't want to "
+            "re-capture. Same output shape as screen_find_text."
+        ))
+        def ocr_find_text_in_file(
+            path: str,
+            needle: str,
+        ) -> list[dict[str, Any]]:
+            if (e := _guard("ocr_find_text_in_file",
+                            {"path": path, "needle": needle})):
+                return [{"error": e}]
+            from pathlib import Path as _P
+            try:
+                matches = plat.ocr.find_text(_P(path), needle)
+            except (BackendError, NotSupportedError) as exc:
+                agent.audit("ocr_find_text_in_file",
+                            {"path": path, "needle": needle}, str(exc))
+                return [{"error": str(exc)}]
+            agent.audit("ocr_find_text_in_file", {
+                "path": path, "needle": needle, "matches": len(matches),
+            })
+            return [m.to_dict() for m in matches]
 
 
 def _register_misc(mcp: Any) -> None:

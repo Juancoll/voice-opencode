@@ -235,6 +235,46 @@ Other knobs:
   stdout/stderr *lengths* (not contents — keeps logs small and
   avoids leaking secrets from environment dumps).
 
+## Find text on the screen with OCR (Phase F)
+
+Tesseract-backed OCR with word-level bounding boxes. Two
+flavours: capture-then-OCR for "what's on screen right now",
+or OCR an existing image file on disk.
+
+```bash
+voice ocr find Chrome                          # OCRs the focused monitor
+voice ocr find "File menu" --region 0 0 800 60 # OCRs only that region
+voice ocr file ~/Pictures/x.png "Submit"       # OCRs an existing image
+voice ocr dump screenshot.png                  # all recognised text, no needle
+```
+
+`--region X Y W H` shifts every returned bbox back to
+absolute screen coordinates, so the agent can immediately
+click on or read text near the result via
+`voice_desktop_click_mouse` / `voice_desktop_move_mouse`.
+
+Two MCP tools, both **read-only** (no side effects, just
+pixel reads):
+
+- `screen_find_text(needle, region?)` — captures the
+  focused monitor, OCRs, returns matches in screen coords.
+- `ocr_find_text_in_file(path, needle)` — pure backend
+  passthrough; bboxes are in the image's own coordinate
+  space.
+
+Languages and confidence floor are settings:
+
+- `ocr_languages` — tuple, default `("spa", "eng")`. First
+  language wins ties. Override per project in `config.json`.
+- `ocr_min_confidence` — float 0-100, default 50.0. Rows
+  below this are dropped before needle matching.
+
+Tesseract on a 4K full-screen capture takes ~5-30 seconds
+depending on font density; use `--region` for snappy
+interactive use. The backend hard-caps each invocation at
+60 s and runs Tesseract with `OMP_THREAD_LIMIT=1` to avoid
+a CPU storm when the agent fires several OCR calls back-to-back.
+
 ## Audit & capacity from the tray (Phase J)
 
 The tray's **Agente** submenu has two entries:

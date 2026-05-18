@@ -183,3 +183,16 @@ def test_shell_run_only_in_full(monkeypatch):
     assert "shell_run" not in a
     f = _build_with(monkeypatch, "full")
     assert "shell_run" in f
+
+
+def test_ocr_tools_in_read_only(monkeypatch):
+    """Phase F: OCR tools must be available in every tier (read-only)."""
+    ro = _build_with(monkeypatch, "read-only")
+    # OCR tools require the tesseract backend to be wired; if absent
+    # (CI host without tesseract) the tools simply won't appear.
+    # On any host where the capability is present, they MUST be in
+    # read-only — they only read pixels.
+    from voice_opencode import platform as plat
+    if plat.supported("ocr.find_text"):
+        assert "screen_find_text" in ro
+        assert "ocr_find_text_in_file" in ro

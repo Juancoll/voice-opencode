@@ -42,6 +42,7 @@ voice-opencode/
 │       ├── linux_audio_pipewire/  # wpctl + playerctl (real, Phase H)
 │       ├── linux_apps_xdg/        # gtk-launch + /proc + .desktop (real, Phase I)
 │       ├── linux_shell_posix/     # subprocess + allowlist + no-shell (real, Phase E)
+│       ├── linux_ocr_tesseract/   # tesseract TSV + word-level match (real, Phase F)
 │       ├── linux_dialog_kde/      # kdialog (real, Phase C) + libnotify (real)
 │       ├── linux_dialog_gtk/      # zenity (real, Phase C — fallback)
 │       ├── macos_stub/            # placeholder for AppleScript/Quartz
@@ -98,7 +99,7 @@ plat.clipboard.read()
 ```
 
 The singletons (``wm``, ``input``, ``screen``, ``clipboard``, ``notify``,
-``dialog``, ``audio``, ``media``, ``apps``, ``shell``) **always** resolve
+``dialog``, ``audio``, ``media``, ``apps``, ``shell``, ``ocr``) **always** resolve
 to *something*: a real backend if one was wired, otherwise a Null
 implementation that raises ``NotSupportedError`` from every method.
 

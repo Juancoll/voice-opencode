@@ -125,3 +125,14 @@ class NullShellBackend(_NullBase):
     def run(self, cmd: str | list[str], cwd: str | None = None,
             timeout: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
                                                    raise _no("shell.run")
+
+
+class NullOCRBackend(_NullBase):
+    def find_text(self, image_path: Path, needle: str,
+                  languages: tuple[str, ...] | None = None,
+                  min_confidence: float = 50.0) -> list[Any]:
+                                                   raise _no("ocr.find_text")
+    def dump_text(self, image_path: Path,
+                  languages: tuple[str, ...] | None = None,
+                  min_confidence: float = 50.0) -> list[Any]:
+                                                   raise _no("ocr.dump_text")

@@ -49,12 +49,13 @@ from .base import (
     InputBackend,
     MediaBackend,
     NotifyBackend,
+    OCRBackend,
     ScreenBackend,
     ShellBackend,
     WindowManager,
 )
 from .capabilities import *  # noqa: F401,F403  re-export capability constants
-from .types import Monitor, Rect, Window, Workspace  # noqa: F401  re-export
+from .types import Monitor, OcrMatch, Rect, Window, Workspace  # noqa: F401  re-export
 
 # ---------------------------------------------------------------------------
 # Detection
@@ -133,6 +134,7 @@ def _build(plat: str) -> dict[str, Any]:
         "media":     null.NullMediaBackend(),
         "apps":      null.NullAppLauncher(),
         "shell":     null.NullShellBackend(),
+        "ocr":       null.NullOCRBackend(),
     }
     if plat == PLATFORM_LINUX_HYPRLAND:
         from ..backends.linux_hyprland import wm as hypr_wm
@@ -200,6 +202,9 @@ def _wire_common_linux(
     from ..backends.linux_shell_posix import shell_backend
     if (b := _try(shell_backend.PosixShellBackend, "linux_shell_posix")):
         out["shell"] = b
+    from ..backends.linux_ocr_tesseract import tesseract_backend
+    if (b := _try(tesseract_backend.TesseractOCRBackend, "linux_ocr_tesseract")):
+        out["ocr"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):
@@ -242,7 +247,7 @@ def __getattr__(name: str) -> Any:
     """
     if name in {
         "wm", "input", "screen", "clipboard", "notify", "dialog",
-        "audio", "media", "apps", "shell",
+        "audio", "media", "apps", "shell", "ocr",
     }:
         _ensure_loaded()
         return _state["backends"][name]
@@ -277,8 +282,8 @@ def _reset_for_tests() -> None:
 __all__ = [
     "WindowManager", "InputBackend", "ScreenBackend", "ClipboardBackend",
     "NotifyBackend", "DialogBackend", "AudioBackend", "MediaBackend",
-    "AppLauncher", "ShellBackend",
-    "Window", "Workspace", "Monitor", "Rect",
+    "AppLauncher", "ShellBackend", "OCRBackend",
+    "Window", "Workspace", "Monitor", "Rect", "OcrMatch",
     "active_platform", "supported", "all_capabilities", "detect_platform",  # noqa: F405
     "PLATFORM_LINUX_HYPRLAND", "PLATFORM_LINUX_KDE_WAYLAND",
     "PLATFORM_LINUX_WLROOTS", "PLATFORM_LINUX_X11",

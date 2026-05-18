@@ -96,6 +96,33 @@ class Window:
 
 
 # ---------------------------------------------------------------------------
+# OCR
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class OcrMatch:
+    """A single text match found by the OCR backend.
+
+    ``text`` is the joined text of one or more consecutive words on
+    the same line that, concatenated, matched the search needle (or
+    just one word if ``find_text`` was called without a needle).
+    ``rect`` is the union of those words' bounding boxes in image
+    pixel coordinates (top-left origin). ``confidence`` is 0-100,
+    the minimum confidence across the joined words.
+    """
+
+    text: str
+    rect: Rect
+    confidence: float        # 0.0–100.0 (Tesseract scale)
+    line: int = -1           # block_num × 1000 + line_num; for ordering
+    word_index: int = -1     # first word's index within the line
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["rect"] = self.rect.to_dict()
+        return d
+
+
+# ---------------------------------------------------------------------------
 # Input enumerations
 # ---------------------------------------------------------------------------
 MOUSE_BUTTONS = ("left", "right", "middle")

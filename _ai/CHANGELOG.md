@@ -3,6 +3,74 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Phase F: OCR find_text (Tesseract)
+
+- New ``backends/linux_ocr_tesseract/tesseract_backend.py`` —
+  ``TesseractOCRBackend`` implementing the new ``OCRBackend``
+  Protocol. Pure: image-path in, ``list[OcrMatch]`` out.
+  Invokes ``tesseract <png> - -l <langs> --psm 6 tsv`` with
+  ``OMP_THREAD_LIMIT=1`` and a 60 s hard timeout. ``_parse_tsv``
+  drops non-word rows (``level != 5``), negative-conf rows,
+  malformed rows, and empty text cells. ``_match_needle``
+  walks consecutive words on the same ``(block, line)``,
+  lower-cases both sides, trims unmatched prefix/suffix
+  tokens, unions matched-word rects, dedups, sorts in reading
+  order, and bounds the search per-line at
+  ``len(joined) > len(needle) * 4`` to keep termination O(n).
+- New capability constants ``OCR_FIND_TEXT`` and
+  ``OCR_DUMP_TEXT`` in ``platform/capabilities.py``. New
+  frozen dataclass ``OcrMatch(text, rect, confidence, line,
+  word_index)`` in ``platform/types.py`` (``line`` encoded as
+  ``block_num * 1000 + line_num`` so it sorts naturally).
+  ``OCRBackend`` Protocol added to ``platform/base.py``;
+  ``NullOCRBackend`` added to ``platform/null.py``;
+  ``platform/__init__.py`` wires the Tesseract backend into
+  the ``ocr`` slot and re-exports ``OcrMatch``.
+- ``config.Settings``: new ``ocr_languages: tuple[str, ...] =
+  ("spa", "eng")`` and ``ocr_min_confidence: float = 50.0``.
+  ``_coerce`` already covered both types from Phase E.
+- ``cli.py``: new ``voice ocr {find|dump|file}`` group. ``find``
+  captures the focused monitor (or ``--region X Y W H``) and
+  prints word-level matches; bboxes are shifted back to
+  absolute screen coords when ``--region`` is set. ``file``
+  OCRs any PNG/JPG on disk. ``dump`` writes all recognised
+  text for an image without filtering by needle.
+- ``mcp_server.py``: new ``_register_ocr(mcp)`` exposing
+  ``screen_find_text(needle, region?)`` (composed:
+  capture → temp PNG → OCR → shift → delete) and
+  ``ocr_find_text_in_file(path, needle)`` (pure backend
+  passthrough). Both gated via ``_expose(cap.OCR_FIND_TEXT,
+  …)``. Audit records ``{needle, matches: N}`` — never the
+  text contents.
+- ``capacity.py``: both new tools mapped to ``read-only``
+  (they only read pixels — no side effects). Live tool
+  counts: read-only 17 (eran 15), assist 41 (eran 39), full
+  44 (eran 42).
+- New **ADR-0018** documenting (1) the pure backend +
+  composed MCP helper split, (2) word-level granularity,
+  (3) configurable language tuple. Alternatives rejected:
+  high-level helper inside the backend, line-level matches,
+  hard-coded English.
+- 252 tests verde (eran 219): +30+ in
+  ``tests/test_backend_ocr.py`` covering init + capability
+  declaration, TSV parser (header skip, malformed rows,
+  level filter, conf filter, empty text), ``_union_rects``,
+  single-word ``_match_needle`` (hit/miss, case folding,
+  confidence floor), multi-word ``_match_needle`` (in-order
+  match, trimmed prefix/suffix, pruning bound), mocked
+  subprocess invocation (argv shape, env, timeout); +1 in
+  ``tests/test_mcp_server.py`` (``test_ocr_tools_in_read_only``).
+- Smoke live OK: ``./voice ocr find Chrome --region 0 0 800 200``
+  returned a single bbox at ``(170, 8, 41, 30)`` with conf
+  92.12; ``screen_find_text`` over MCP returned the same
+  match shape.
+- New runtime deps (already installed locally and shipped in
+  ``install.sh``'s 957fb79 commit): ``tesseract``,
+  ``tesseract-data-eng``, ``tesseract-data-spa``. STATE.md
+  already lists them.
+- ruff + mypy verde (59 source files, +2:
+  ``backends/linux_ocr_tesseract/{__init__,tesseract_backend}.py``).
+
 ## 2026-05-18 — Phase E: ``shell_run`` with safety rails
 
 - New ``backends/linux_shell_posix/shell_backend.py`` —

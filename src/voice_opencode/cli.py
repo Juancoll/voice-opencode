@@ -695,6 +695,89 @@ def cmd_shell(args: list[str]) -> int:
 
 
 # ---- platform subgroup (diagnostics) ----------------------------------------
+def cmd_ocr(args: list[str]) -> int:
+    """
+    voice ocr find <text> [--region X Y W H]   — search needle on screen
+    voice ocr dump [--region X Y W H]          — list every detected word
+    voice ocr file <path> <text>               — OCR an existing PNG
+
+    Default capture is the focused monitor. ``--region`` is much faster
+    on 4K displays; coordinates are absolute screen pixels.
+    """
+    if not args:
+        _eprint(cmd_ocr.__doc__)
+        return 1
+    sub = args[0]
+    rest = args[1:]
+    # Parse --region X Y W H from anywhere in rest.
+    region = None
+    if "--region" in rest:
+        i = rest.index("--region")
+        try:
+            x, y, w, h = (int(t) for t in rest[i + 1:i + 5])
+        except (ValueError, IndexError):
+            _eprint("--region needs four integers: X Y W H")
+            return 1
+        region = (x, y, w, h)
+        rest = rest[:i] + rest[i + 5:]
+
+    try:
+        if sub in ("find", "dump"):
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                png = Path(tf.name)
+            try:
+                if region:
+                    plat.screen.capture_region(png, *region)
+                else:
+                    plat.screen.capture_monitor(png)
+                if sub == "find":
+                    if not rest:
+                        _eprint("Usage: voice ocr find <text>")
+                        return 1
+                    needle = " ".join(rest)
+                    matches = plat.ocr.find_text(png, needle)
+                else:
+                    matches = plat.ocr.dump_text(png)
+            finally:
+                png.unlink(missing_ok=True)
+            # If a region was used, shift bboxes back to screen coords.
+            if region:
+                ox, oy, _, _ = region
+                matches = [
+                    type(m)(
+                        text=m.text,
+                        rect=type(m.rect)(
+                            x=m.rect.x + ox, y=m.rect.y + oy,
+                            w=m.rect.w, h=m.rect.h,
+                        ),
+                        confidence=m.confidence,
+                        line=m.line, word_index=m.word_index,
+                    ) for m in matches
+                ]
+            print(json.dumps(
+                [m.to_dict() for m in matches], indent=2, ensure_ascii=False,
+            ))
+            return 0
+        if sub == "file":
+            if len(rest) < 2:
+                _eprint("Usage: voice ocr file <path> <text...>")
+                return 1
+            path = Path(rest[0])
+            needle = " ".join(rest[1:])
+            matches = plat.ocr.find_text(path, needle)
+            print(json.dumps(
+                [m.to_dict() for m in matches], indent=2, ensure_ascii=False,
+            ))
+            return 0
+        _eprint(cmd_ocr.__doc__)
+        return 1
+    except (BackendError, NotSupportedError) as e:
+        _eprint(f"error: {e}")
+        return 1
+
+
+# ---- platform subgroup (diagnostics) ----------------------------------------
 def cmd_platform(args: list[str]) -> int:
     """
     voice platform info        — active platform and full capability set
@@ -743,6 +826,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "media":      cmd_media,
     "apps":       cmd_apps,
     "shell":      cmd_shell,
+    "ocr":        cmd_ocr,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
 }

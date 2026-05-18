@@ -8,7 +8,7 @@
 > Also read **AGENTS.md** for repo-wide conventions and **`_ai/CHANGELOG.md`**
 > for the full granular history. This file is the *current cursor*.
 
-Last updated: 2026-05-18 — end of Phase E.
+Last updated: 2026-05-18 — end of Phase F.
 
 ---
 
@@ -61,11 +61,54 @@ published on GitHub.
 | I     | Apps (XDG launcher: list/running/launch/kill) | ✅ done    |
 | J     | Audit viewer + capacity kill-switch en tray | ✅ done    |
 | E     | run_shell with safety rails        | ✅ done       |
-| F     | OCR find_text (Tesseract)          | ⏭ next       |
-| G     | Memory (Markdown plano)            | pending       |
+| F     | OCR find_text (Tesseract)          | ✅ done       |
+| G     | Memory (Markdown plano)            | ⏭ next       |
 | K     | OS-agnostic detect_*: replace UA strings with ``platform_info`` | pending |
 
-## What just shipped (Phase E, this commit)
+## What just shipped (Phase F, this commit)
+
+- ``backends/linux_ocr_tesseract/tesseract_backend.py``:
+  ``TesseractOCRBackend``, pure (image-path → matches).
+  Invokes ``tesseract <png> - -l <langs> --psm 6 tsv`` with
+  ``OMP_THREAD_LIMIT=1`` and a 60 s hard timeout. Word-level
+  TSV parser (``level=5`` rows only) feeds ``_match_needle``
+  which joins consecutive same-line words, trims unmatched
+  prefix/suffix, unions bboxes, and bounds per-line work at
+  ``len(joined) > len(needle)*4`` to stay O(n) per line.
+- New capability constants ``OCR_FIND_TEXT`` + ``OCR_DUMP_TEXT``.
+  New ``OcrMatch(text, rect, confidence, line, word_index)``
+  dataclass in ``platform/types.py``. ``OCRBackend`` Protocol
+  + ``NullOCRBackend`` added. ``platform/__init__.py`` wires
+  the backend into the ``ocr`` slot and re-exports ``OcrMatch``.
+- ``config.Settings``: ``ocr_languages: tuple[str, ...] =
+  ("spa", "eng")`` and ``ocr_min_confidence: float = 50.0``.
+- ``cli.py``: new ``voice ocr {find|dump|file}`` group.
+  ``find`` accepts ``--region X Y W H`` and shifts bboxes back
+  to absolute screen coords.
+- ``mcp_server.py``: new ``_register_ocr(mcp)`` with two
+  tools — ``screen_find_text(needle, region?)`` (composed:
+  capture → temp PNG → OCR → shift → delete) and
+  ``ocr_find_text_in_file(path, needle)`` (pure passthrough).
+  Both gated via ``_expose(cap.OCR_FIND_TEXT, …)``. Audit
+  records ``{needle, matches: N}`` — never text contents.
+- ``capacity.py``: both tools mapped to ``read-only`` (no
+  side effects). Live counts: read-only 17, assist 41, full 44.
+- New **ADR-0018** — pure backend + composed MCP helper,
+  word-level granularity, configurable language tuple.
+- 252 tests verde (eran 219): +30+ in
+  ``tests/test_backend_ocr.py`` (init/caps, TSV parser,
+  union helper, single/multi-word match, mocked subprocess);
+  +1 in ``tests/test_mcp_server.py``
+  (``test_ocr_tools_in_read_only``).
+- Smoke live OK: ``./voice ocr find Chrome --region 0 0 800 200``
+  returned ``(170, 8, 41, 30)`` conf 92.12; MCP
+  ``screen_find_text`` returned the same match shape.
+- New runtime deps (already in ``install.sh`` and STATE.md
+  since installer commit 957fb79): ``tesseract``,
+  ``tesseract-data-eng``, ``tesseract-data-spa``.
+- ruff + mypy verde (59 source files, +2).
+
+## Previously shipped (Phase E)
 
 - ``backends/linux_shell_posix/shell_backend.py``: real
   ``PosixShellBackend``. Three layered rails (ADR-0017):
@@ -254,19 +297,12 @@ published on GitHub.
 
 ## Next concrete steps for the incoming agent
 
-1. **Phase F — OCR find_text (Tesseract).** Tomar
-   `screen.capture_*` + tesseract → encontrar texto y
-   devolver bounding box. Backend nuevo
-   `backends/linux_ocr_tesseract/`. Capability
-   `screen.find_text`. Tier `read-only`. Requiere `pacman -S
-   tesseract tesseract-data-eng tesseract-data-spa` (preguntar
-   al usuario antes de instalar).
-2. **Phase G — Memory (Markdown plano).** Persistir
+1. **Phase G — Memory (Markdown plano).** Persistir
    conversaciones del agente en `memory/YYYY-MM-DD.md`,
    tool MCP `memory_search` / `memory_append`. Sin DB; solo
    ripgrep o fts5 si crece. Tier read-only para search,
    assist para append.
-3. **Phase K (futuro, opcional)** — OS-agnostic detection helpers:
+2. **Phase K (futuro, opcional)** — OS-agnostic detection helpers:
    reemplazar UA-strings y heurísticas dispersas por
    ``platform_info`` consultable y testeable.
 
@@ -329,6 +365,14 @@ published on GitHub.
   truncation, audit records lengths not contents, tool lives in
   `full` tier only. Denylist + sanitisation + per-call dialog all
   rejected with rationale.
+- ADR-0018: OCR backend stays pure (image-path → matches); MCP
+  composes ``capture + ocr`` in ``screen_find_text`` and also
+  exposes the pure backend as ``ocr_find_text_in_file``.
+  Word-level granularity via Tesseract TSV (``--psm 6``,
+  ``level=5`` rows); multi-word needles join consecutive
+  same-line words and union their bboxes. Languages
+  configurable via ``settings.ocr_languages`` (default
+  ``("spa", "eng")``). Both tools live in ``read-only`` tier.
 
 ## Environment variables (optional)
 
@@ -344,14 +388,14 @@ published on GitHub.
 ```bash
 cd ~/gitr/voice-opencode                     # or wherever the repo lives
 git pull
-PYTHONPATH=src venv/bin/pytest -q            # should be 219 passing
+PYTHONPATH=src venv/bin/pytest -q            # should be 252 passing
 venv/bin/ruff check src tests                # all clean
-venv/bin/mypy src/voice_opencode             # no issues, 57 files
+venv/bin/mypy src/voice_opencode             # no issues, 59 files
 ./voice platform info                        # confirm correct backend
 ./voice state | jq                           # what's the system doing right now
 ```
 
-If any of those fail, fix them **before** starting Phase F.
+If any of those fail, fix them **before** starting Phase G.
 
 ## Files to read first when resuming
 

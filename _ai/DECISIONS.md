@@ -5,6 +5,96 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0018 — OCR backend: pure `find_text(path, …)` + composed MCP helper
+
+Date: 2026-05-18
+
+### Context
+
+Phase F wires Tesseract so the agent can answer "where does the
+text *X* appear on screen?". Two design axes had to be settled:
+
+1. **Where does screen capture live?** Either the OCR backend
+   takes a screenshot internally (high-level helper:
+   ``find_text_on_screen(needle)``), or it stays pure
+   (image-path in, matches out) and the MCP layer composes
+   ``screen.capture_*`` + ``ocr.find_text``.
+2. **What granularity is a "match"?** Either Tesseract's line
+   rows (single bbox per matched line, simple) or word-level
+   rows (each word has its own bbox; multi-word needles join
+   consecutive same-line words).
+
+### Decision
+
+**Option C — pure backend + composed helper.** The
+``OCRBackend`` Protocol exposes only ``find_text(path, needle, …)``
+and ``dump_text(path, …)``. The MCP tool ``screen_find_text``
+captures the focused monitor (or a ``--region``) to a temp
+PNG, calls the backend, shifts bboxes back to absolute screen
+coordinates, and deletes the temp file. A second MCP tool
+``ocr_find_text_in_file(path, needle)`` exposes the pure
+backend directly so the agent can OCR any image already on
+disk (a screenshot the user took, a downloaded PNG, etc.)
+without re-capture.
+
+**Word-level matching.** We parse Tesseract's TSV with
+``--psm 6`` and filter ``level == 5`` (word rows). Multi-word
+needles are matched by walking consecutive words on the same
+``(block, line)``, lower-casing both sides, dropping
+non-matching prefix/suffix tokens, and taking the bounding-box
+union of the matched words via a tiny ``_union_rects`` helper.
+
+**OCR languages are configurable.** ``Settings`` gains
+``ocr_languages: tuple[str, ...] = ("spa", "eng")`` and
+``ocr_min_confidence: float = 50.0``. Languages are joined with
+``+`` and passed to Tesseract's ``-l`` flag in declaration order
+(first language wins ties).
+
+### Alternatives rejected
+
+- **High-level helper inside the backend**
+  (``find_text_on_screen(needle)``). Would have coupled OCR
+  backends to ``platform.screen``, breaking the rule that
+  backends never import each other. Would also have prevented
+  the agent from OCR-ing an arbitrary file without taking a
+  fresh screenshot. Composing at the MCP layer keeps each
+  backend single-purpose and lets us add more compositions
+  later (e.g. OCR a clipboard image) without touching backends.
+- **Line-level matches only.** Simpler parser, single bbox
+  per match, but loses positional precision when the needle is
+  one word inside a long line — the agent would then have to
+  click the entire line. Word-level keeps the bbox tight; the
+  TSV row count cost is negligible.
+- **Hard-coded English only.** Tesseract is per-language;
+  loading both ``spa`` and ``eng`` costs ~50 ms extra at startup
+  and a few MB of RAM, but a Spanish-speaking user would
+  otherwise see garbled output on Spanish text. The default
+  pair covers our environment; the tuple is overridable per
+  project via ``config.json``.
+
+### Consequences
+
+- The MCP exposes **two** OCR tools, both ``read-only`` (no
+  side effects — they only read pixels):
+  - ``screen_find_text(needle, region?)`` — captures + OCRs;
+    shifts bboxes to absolute coords when ``region`` is given.
+  - ``ocr_find_text_in_file(path, needle)`` — OCRs an
+    existing image; bboxes are in the image's own coordinate
+    space.
+- The backend has a hard 60-second ``subprocess.run`` timeout
+  and runs Tesseract with ``OMP_THREAD_LIMIT=1`` to avoid a
+  CPU storm when the agent fires several OCR calls back-to-back.
+- ``_match_needle`` has a termination bound
+  ``len(joined) > len(needle) * 4`` so a pathological line
+  with many false-positive prefixes stays O(n) per line.
+- The capability constants ``OCR_FIND_TEXT`` and
+  ``OCR_DUMP_TEXT`` are now part of the stable contract —
+  renaming = breaking change for every backend.
+- Live tool counts: read-only **17** (+2), assist **41**
+  (+2), full **44** (+2). 252 tests verde (+33).
+
+---
+
 ## ADR-0017 — `shell_run` policy: default-deny regex allowlist + no shell
 
 Date: 2026-05-18
