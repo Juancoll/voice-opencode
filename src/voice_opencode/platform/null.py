@@ -136,3 +136,25 @@ class NullOCRBackend(_NullBase):
                   languages: tuple[str, ...] | None = None,
                   min_confidence: float = 50.0) -> list[Any]:
                                                    raise _no("ocr.dump_text")
+
+
+class NullRecorderBackend(_NullBase):
+    def is_recording(self) -> bool:                return False
+    def start(self, out_path: Path) -> None:       raise _no("recorder.start")
+    def stop(self, out_path: Path) -> Path | None: raise _no("recorder.stop")
+
+
+class NullPlayerBackend(_NullBase):
+    def play_wav(self, wav_path: Path, timeout_s: float = 60.0) -> None:
+                                                   raise _no("player.play_wav")
+
+
+class NullTTSBackend(_NullBase):
+    def list_voices(self) -> list[str]:            return []
+    def synthesize(self, text: str, voice: str, out_wav: Path,
+                   *, speaker_id: int | None = None) -> Path:
+                                                   raise _no("tts.synthesize")
+
+
+class NullSTTBackend(_NullBase):
+    def transcribe(self, wav_path: Path) -> str:   raise _no("stt.transcribe")

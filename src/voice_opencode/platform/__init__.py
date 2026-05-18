@@ -52,8 +52,12 @@ from .base import (
     MediaBackend,
     NotifyBackend,
     OCRBackend,
+    PlayerBackend,
+    RecorderBackend,
     ScreenBackend,
     ShellBackend,
+    STTBackend,
+    TTSBackend,
     WindowManager,
 )
 from .capabilities import *  # noqa: F401,F403  re-export capability constants
@@ -302,6 +306,10 @@ def _build(plat: str) -> dict[str, Any]:
         "apps":      null.NullAppLauncher(),
         "shell":     null.NullShellBackend(),
         "ocr":       null.NullOCRBackend(),
+        "recorder":  null.NullRecorderBackend(),
+        "player":    null.NullPlayerBackend(),
+        "tts":       null.NullTTSBackend(),
+        "stt":       null.NullSTTBackend(),
     }
     if plat == PLATFORM_LINUX_HYPRLAND:
         from ..backends.linux_hyprland import wm as hypr_wm
@@ -372,6 +380,11 @@ def _wire_common_linux(
     from ..backends.linux_ocr_tesseract import tesseract_backend
     if (b := _try(tesseract_backend.TesseractOCRBackend, "linux_ocr_tesseract")):
         out["ocr"] = b
+    # Voice pipeline: recorder (arecord) — see ADR-0023.
+    from ..backends.linux_audio_arecord import recorder as arecord_recorder
+    if (b := _try(arecord_recorder.ArecordRecorderBackend,
+                  "linux_audio_arecord")):
+        out["recorder"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):
@@ -415,6 +428,7 @@ def __getattr__(name: str) -> Any:
     if name in {
         "wm", "input", "screen", "clipboard", "notify", "dialog",
         "audio", "media", "apps", "shell", "ocr",
+        "recorder", "player", "tts", "stt",
     }:
         _ensure_loaded()
         return _state["backends"][name]
@@ -450,6 +464,7 @@ __all__ = [
     "WindowManager", "InputBackend", "ScreenBackend", "ClipboardBackend",
     "NotifyBackend", "DialogBackend", "AudioBackend", "MediaBackend",
     "AppLauncher", "ShellBackend", "OCRBackend",
+    "RecorderBackend", "PlayerBackend", "TTSBackend", "STTBackend",
     "Window", "Workspace", "Monitor", "Rect", "OcrMatch",
     "active_platform", "supported", "all_capabilities", "detect_platform",  # noqa: F405
     "platform_info", "PlatformInfo",

@@ -80,6 +80,20 @@ MEDIA_PREV              = "media.prev"
 MEDIA_STATUS            = "media.status"
 
 # ---------------------------------------------------------------------------
+# Voice pipeline — recorder / player / tts / stt (Phase A)
+# ---------------------------------------------------------------------------
+# These belong to the voice pipeline proper. They were missing from
+# the original platform surface because the recorder/player/tts/stt
+# modules were written before the abstraction existed. See ADR-0023.
+RECORDER_START          = "recorder.start"
+RECORDER_STOP           = "recorder.stop"
+RECORDER_IS_RECORDING   = "recorder.is_recording"
+PLAYER_PLAY_WAV         = "player.play_wav"
+TTS_SYNTHESIZE          = "tts.synthesize"
+TTS_LIST_VOICES         = "tts.list_voices"
+STT_TRANSCRIBE          = "stt.transcribe"
+
+# ---------------------------------------------------------------------------
 # Apps
 # ---------------------------------------------------------------------------
 APP_LAUNCH              = "app.launch"

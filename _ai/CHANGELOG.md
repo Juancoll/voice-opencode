@@ -3,6 +3,43 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.2: RecorderBackend + ArecordRecorderBackend
+
+- Phase A.2: extract microphone capture into the platform surface.
+  Added ``RecorderBackend`` Protocol (``base.py``), capabilities
+  ``RECORDER_START``/``RECORDER_STOP``/``RECORDER_IS_RECORDING``,
+  ``NullRecorderBackend`` (with ``is_recording() -> False`` instead
+  of raising, so the lock/audio guards in the pipeline still work
+  on hosts without a wired backend), and the concrete
+  ``ArecordRecorderBackend`` at
+  ``backends/linux_audio_arecord/recorder.py`` — bit-for-bit the
+  same logic that lived in ``audio.py`` (S16_LE @ 16 kHz mono,
+  SIGINT for WAV finalisation, 2.5 s wait, 4 KB min-usable
+  threshold).
+- ``platform.__init__`` wires ``recorder``, ``player``, ``tts`` and
+  ``stt`` slots at once (the latter three default to their Null
+  implementations; they'll be filled in A.3-A.5). Doing the slot
+  reservation in a single commit keeps ``_build`` from being touched
+  four times in a row.
+- ``audio.py`` becomes a 28-line shim: ``start``/``stop``/
+  ``is_recording`` delegate to ``_plat.recorder`` using the canonical
+  ``REC_WAV_FILE`` so ``pipeline.py``, ``stt.py`` and the tests don't
+  change. The shim deliberately keeps the public surface narrow —
+  callers that want a custom output path should use
+  ``platform.recorder`` directly.
+- New ``tests/test_backend_recorder.py`` (13 cases): construction
+  guard (``arecord`` not on PATH → ``BackendError``), capability
+  declaration, ``is_recording`` paths (no PID file / live PID / stale
+  PID / garbage), ``start`` (Popen args incl. the whisper-mandated
+  format, no-op when already recording, unlinks previous WAV), and
+  ``stop`` (not-recording / file-too-small / usable / SIGINT-before-
+  poll). All via mocked ``subprocess.Popen`` + ``os.kill``;
+  ``tmp_path`` isolation so the live ``$XDG_RUNTIME_DIR`` never
+  leaks into the suite.
+- Verified: 358 passed (+13), ruff + mypy clean (63 source files,
+  +2 backend package), live smoke (0.6 s record → 12 KB WAV at
+  ``rec.wav``). No consumer changed.
+
 ## 2026-05-19 — A.1: notify.py shim over platform.notify
 
 - Phase A.1 of the multiplatform plan. Auditor (read-only) confirmed

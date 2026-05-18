@@ -274,3 +274,86 @@ class OCRBackend(Protocol):
         and for the agent when it wants a screen reader-style dump.
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# Voice pipeline surfaces (Phase A — see ADR-0023)
+# ---------------------------------------------------------------------------
+@runtime_checkable
+class RecorderBackend(Protocol):
+    """Microphone capture to a WAV file.
+
+    Implementations must:
+
+    * spawn a detached process / thread, return immediately from ``start``;
+    * write the WAV to ``out_path`` such that ``stop()`` leaves a
+      valid, finalised file (whisper.cpp must be able to read it);
+    * persist the recorder's identity (PID / handle) somewhere the
+      backend can find it on the next ``stop()`` call, since the
+      backend may be re-instantiated between ``start`` and ``stop``
+      (each F9 keypress is its own Python process);
+    * return a *minimum size threshold*-aware result from ``stop()``:
+      if the recording is too small to be real speech (tap rather
+      than utterance) return ``None`` — the caller treats ``None``
+      as "no usable audio".
+
+    The format is fixed to what whisper.cpp expects: 16 kHz mono
+    16-bit LE. Hardcoded on purpose: changing it requires changing
+    the STT side too.
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
+
+    def is_recording(self) -> bool: ...
+    def start(self, out_path: Path) -> None: ...
+    def stop(self, out_path: Path) -> Path | None: ...
+
+
+@runtime_checkable
+class PlayerBackend(Protocol):
+    """Synchronous WAV playback.
+
+    Blocks until the file finishes playing (or until ``timeout_s``
+    elapses, whichever comes first). The TTS pipeline relies on this
+    blocking semantics to know when speech is done.
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
+
+    def play_wav(self, wav_path: Path, timeout_s: float = 60.0) -> None: ...
+
+
+@runtime_checkable
+class TTSBackend(Protocol):
+    """Offline text-to-speech.
+
+    Implementations should *only* synthesise — playback is a separate
+    surface (``PlayerBackend``). This keeps TTS engine and audio sink
+    independently swappable.
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
+
+    def list_voices(self) -> list[str]: ...
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        out_wav: Path,
+        *,
+        speaker_id: int | None = None,
+    ) -> Path: ...
+
+
+@runtime_checkable
+class STTBackend(Protocol):
+    """Offline speech-to-text.
+
+    Takes a WAV file (produced by ``RecorderBackend``) and returns the
+    transcript as plain text. The backend is responsible for picking
+    the language / model based on its own configuration.
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
+
+    def transcribe(self, wav_path: Path) -> str: ...
