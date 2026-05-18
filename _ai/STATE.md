@@ -30,6 +30,9 @@ session. Refresh this whenever something material changes.
 | `wireplumber`     | `wpctl` (PipeWire audio control)       |
 | `playerctl`       | MPRIS media transport CLI              |
 | `gtk3`            | `gtk-launch` (XDG app launcher, Phase I) |
+| `tesseract`       | OCR engine (Phase F)                   |
+| `tesseract-data-eng` | OCR English language data           |
+| `tesseract-data-spa` | OCR Spanish language data           |
 | `alsa-utils`      | `arecord`                              |
 | `python`          | for the venv                           |
 
