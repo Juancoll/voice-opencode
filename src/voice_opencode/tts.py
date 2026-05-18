@@ -92,18 +92,75 @@ def current_voice() -> VoiceInfo:
 # ---------------------------------------------------------------------------
 # Speaking
 # ---------------------------------------------------------------------------
-# Markdown patterns we strip before TTS. Reading code aloud is awful.
+# Markdown patterns we strip before TTS. Order matters: fences before inline
+# code, images before links (image syntax is a superset of link), emphasis
+# before generic punctuation cleanup. Anything reachable by the LLM that
+# would otherwise be read out as "asterisco asterisco" goes here.
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_RE = re.compile(r"`([^`]+)`")
-_MD_PREFIX_RE = re.compile(r"^[#>\-\*]+\s*", re.MULTILINE)
+# ![alt](url) — keep the alt text only.
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+# [text](url) — keep the visible text, drop the URL.
+_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+# Reference-style link definitions on their own line: [foo]: http://...
+_LINK_REF_RE = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.MULTILINE)
+# Bare URLs (http(s)://...) — replace by "enlace" so TTS does not spell them.
+_BARE_URL_RE = re.compile(r"https?://\S+")
+# Bold ** ** and __ __ — unwrap. Non-greedy to avoid swallowing whole paragraphs.
+_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_BOLD_UNDER_RE = re.compile(r"__(.+?)__", re.DOTALL)
+# Italic * * and _ _ — unwrap. Must run AFTER bold so we don't break **x**.
+# For * we require a non-* neighbour to avoid eating list bullets and ***.
+_ITALIC_STAR_RE = re.compile(r"(?<!\*)\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)")
+_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_(?!\s)([^_\n]+?)(?<!\s)_(?!\w)")
+# Strikethrough ~~text~~ — unwrap.
+_STRIKE_RE = re.compile(r"~~(.+?)~~", re.DOTALL)
+# Leading list / heading / blockquote markers per line.
+# Covers '#', '>', '-', '*', '+', and ordered '1.' / '12)' bullets.
+_MD_PREFIX_RE = re.compile(r"^\s*(?:[#>]+|[-*+]|\d{1,3}[.)])\s+", re.MULTILINE)
+# Markdown table separator rows: | --- | :---: | ---: |
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", re.MULTILINE)
+# Pipe characters in remaining table rows — replace by comma for fluency.
+_TABLE_PIPE_RE = re.compile(r"\s*\|\s*")
+# Simple HTML tags that occasionally sneak through.
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+# Whitespace collapse — must be last.
 _WS_RE = re.compile(r"\s+")
 
 
 def clean_for_tts(text: str) -> str:
-    """Strip markdown/code so the spoken version sounds natural."""
+    """Strip markdown/code so the spoken version sounds natural.
+
+    Steps (order is significant):
+
+    1. Drop fenced code blocks (announce as omitted).
+    2. Drop reference-style link definitions.
+    3. Strip images/links keeping their visible text.
+    4. Replace bare URLs by the word "enlace".
+    5. Unwrap bold (``**``, ``__``) before italic so ``**x**`` is not eaten.
+    6. Unwrap italic (``*``, ``_``) using look-around to avoid bullets.
+    7. Unwrap strikethrough (``~~``).
+    8. Unwrap inline code (``` ` ```) keeping content.
+    9. Strip leading list/heading/blockquote markers per line.
+    10. Strip markdown table separators; turn remaining ``|`` into commas.
+    11. Strip HTML tags.
+    12. Collapse whitespace.
+    """
     text = _FENCE_RE.sub(" (bloque de código omitido) ", text)
+    text = _LINK_REF_RE.sub("", text)
+    text = _IMAGE_RE.sub(r"\1", text)
+    text = _LINK_RE.sub(r"\1", text)
+    text = _BARE_URL_RE.sub("enlace", text)
+    text = _BOLD_STAR_RE.sub(r"\1", text)
+    text = _BOLD_UNDER_RE.sub(r"\1", text)
+    text = _ITALIC_STAR_RE.sub(r"\1", text)
+    text = _ITALIC_UNDER_RE.sub(r"\1", text)
+    text = _STRIKE_RE.sub(r"\1", text)
     text = _INLINE_RE.sub(r"\1", text)
     text = _MD_PREFIX_RE.sub("", text)
+    text = _TABLE_SEP_RE.sub("", text)
+    text = _TABLE_PIPE_RE.sub(", ", text)
+    text = _HTML_TAG_RE.sub("", text)
     return _WS_RE.sub(" ", text).strip()
 
 

@@ -3,6 +3,35 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — TTS markdown sanitizer hardening
+
+- Bug surfaced live: piper was reading every Markdown delimiter
+  literally ("doble asterisco voice-opencode doble asterisco"),
+  making long opencode answers unintelligible. The original
+  ``clean_for_tts()`` only handled fenced code, inline code, a
+  narrow set of line prefixes, and whitespace collapse.
+- Rewrote ``src/voice_opencode/tts.py`` regex set keeping the
+  existing order (fences → inline code → prefixes → whitespace)
+  but inserting the missing layers: bold ``**``/``__``, italic
+  ``*``/``_`` with look-arounds so list bullets are not eaten,
+  strikethrough ``~~``, inline links ``[text](url)`` and images
+  ``![alt](url)`` (alt-text kept), reference-style link
+  definitions (whole line dropped), bare URLs (replaced by the
+  word ``enlace``), ordered list bullets (``1.`` and ``12)``),
+  blockquote markers anywhere on the line, ``+`` bullets,
+  Markdown table separator rows, table pipes (turned into
+  commas), and stray HTML tags. Order is documented in the
+  docstring because it is load-bearing — bold MUST run before
+  italic so ``**x**`` is not consumed by the italic regex.
+- Extended ``tests/test_tts_cleaning.py`` from 5 to 26 cases:
+  one per new category plus a regression test using the exact
+  payload captured in ``logs/voice.log`` during the smoke test
+  ("Veo tu sesión OpenCode en Ghostty…**voice-opencode**…
+  `tts.py`…[el commit](https://…)").
+- Final suite: 325 passed (+21), ruff clean, mypy clean. No
+  ADR — this is a bugfix that strengthens an existing decision,
+  not a new policy.
+
 ## 2026-05-18 — Repository move + env-var indirection
 
 - Moved repo from ``~/gitr/voice-opencode`` → ``~/git/voice-opencode``
