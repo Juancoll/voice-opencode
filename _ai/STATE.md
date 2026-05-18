@@ -9,8 +9,13 @@ session. Refresh this whenever something material changes.
 - Compositor: Hyprland (Wayland)
 - Panel/shell: DankMaterialShell (`dms`, quickshell-based)
 - Default terminal: `foot`
-- Python: 3.13 (`/usr/bin/python`)
+- Python: 3.14 (`/usr/bin/python`) — venv uses the same.
 - User: `juan`, member of `input` group
+- Repo location: `~/git/voice-opencode` (canonical; exposed via
+  `VOICE_OPENCODE_HOME` in `~/.config/environment.d/voice-opencode.conf`
+  so Hyprland binds and the autostart entry never need a hardcoded
+  path). Manifest at `~/.config/voice-opencode/install.manifest.json`
+  lists every file the install touched outside the repo.
 
 ## Pacman packages (runtime)
 
@@ -105,7 +110,7 @@ Plus, in the repo:
   "mcp": {
     "voice_desktop": {
       "type": "local",
-      "command": ["/home/juan/gitr/voice-opencode/voice", "mcp", "serve"],
+      "command": ["/home/juan/git/voice-opencode/voice", "mcp", "serve"],
       "enabled": true
     }
   }

@@ -3,6 +3,50 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-18 — Repository move + env-var indirection
+
+- Moved repo from ``~/gitr/voice-opencode`` → ``~/git/voice-opencode``
+  to consolidate under the user's canonical ``~/git/`` workspace.
+  The ``./voice`` wrapper is location-independent
+  (``DIR="$(cd "$(dirname "$0")" && pwd)"``) so the package itself
+  needed no change.
+- Recreated ``venv/`` from scratch with Python 3.14.4 — every
+  venv carries hardcoded shebangs and ``pyvenv.cfg`` absolute
+  paths, so any ``mv`` of the project root invalidates it. This
+  is a kernel-level constraint (shebangs are interpreted before
+  env vars), not something the installer can paper over.
+- Introduced ``VOICE_OPENCODE_HOME`` env var via
+  ``~/.config/environment.d/voice-opencode.conf``
+  (``VOICE_OPENCODE_HOME=%h/git/voice-opencode``). systemd's
+  ``environment.d`` mechanism exposes it to the whole graphical
+  session at login. Updated ``~/.config/hypr/conf.d/voice.conf``
+  (F9 binds) and ``~/.config/hypr/conf.d/autostart.conf`` (tray
+  exec-once, deduplicated — there were two identical lines from
+  an older install) to use ``$VOICE_OPENCODE_HOME``. Hyprland
+  expands env vars at bind dispatch time, confirmed via
+  ``hyprctl binds -j`` showing the absolute resolved path.
+- ``~/.config/opencode/opencode.json`` keeps the literal absolute
+  path because the opencode docs do not document env-var
+  expansion in ``mcp.<server>.command`` (only in ``headers`` and
+  oauth fields). Conservative: literal path + manifest entry.
+- Wrote ``~/.config/voice-opencode/install.manifest.json``: JSON
+  inventory of every file the install touched (path, owner,
+  action, purpose) so a future ``uninstall.sh`` can revert
+  exactly what was installed without guesswork.
+- Verified end-to-end smoke from the new location: 304 tests
+  green, ``./voice platform info`` returns 12 detected tools,
+  opencode daemon serving on ``127.0.0.1:4096``, MCP server
+  boots reporting ``capacity=assist tools=45``, tray icon
+  visible in DankMaterialShell, F9 push-to-talk pipeline ran
+  twice through STT → screenshot → opencode → TTS (logs in
+  ``logs/voice.log``). One pre-existing bug surfaced during the
+  E2E run: ``paplay`` 60s watchdog kills long TTS replies
+  (``piper exit code -9``); tracked separately, not a move
+  regression.
+- Killed the stale MCP server (pid 71633) that was still bound
+  to the old ``~/gitr`` venv path. opencode respawns it lazily
+  from the updated ``opencode.json`` command on next MCP call.
+
 ## 2026-05-18 — Tanda 3 / Phase K: `platform_info()` structured host snapshot
 
 - New ``voice_opencode.platform.platform_info(env=None, *,
