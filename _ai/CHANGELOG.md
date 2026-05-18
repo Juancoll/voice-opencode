@@ -3,6 +3,38 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — A.4: TTSBackend + PiperTTSBackend; tts.speak rewired
+
+- Phase A.4: cuts the streaming ``piper-tts | paplay`` pipe in
+  ``tts.speak`` into two independent steps: ``platform.tts.synthesize
+  (...)`` writes a WAV to ``$XDG_RUNTIME_DIR/voice-opencode/tts.wav``,
+  then ``platform.player.play_wav(...)`` reproduces it. Same audible
+  result, but TTS engine and audio sink are now independently
+  swappable — that's the unlock Windows needs (Piper binary works
+  cross-platform; WASAPI replaces paplay).
+- The Piper backend lives at ``backends/common_piper/tts.py`` with
+  a ``common_`` prefix (not ``linux_``) because the CLI is identical
+  on Linux and Windows; only the binary path differs (``PIPER_BIN``
+  env override; default ``piper-tts``). This is the first cross-OS
+  backend in the repo and sets the pattern for whisper.cpp next.
+- ``tts.py`` keeps three domain responsibilities: voice metadata
+  (``VoiceInfo`` + helpers, used by ``cli voices`` and tray voice
+  picker), markdown cleaning (``clean_for_tts`` and its 14-pattern
+  regex set), and the orchestration ``speak`` itself. Subprocess
+  calls live exclusively in the backend now.
+- New ``tests/test_backend_piper.py`` (16 cases): construction
+  with/without piper on PATH, ``PIPER_BIN`` env override is
+  consulted by ``shutil.which``, capability set, ``list_voices``
+  (empty + sorted), ``_resolve`` (stem, substring, absolute, missing
+  → ``BackendError``), ``synthesize`` (writes WAV via
+  ``--output_file``, adds ``--speaker`` only for multispeaker
+  models, omits it for single-speaker even when caller passes one,
+  treats rc≠0 / empty file / timeout / unknown voice as failures).
+- Verified: 380 tests (+16), ruff + mypy clean. Live smoke
+  (``python -c "from voice_opencode.tts import speak;
+  speak('Prueba A.4...')"``) reproduced audio; intermediate
+  ``tts.wav`` is a valid 22050 Hz mono S16_LE WAV.
+
 ## 2026-05-19 — A.3: PlayerBackend + PaplayPlayerBackend
 
 - Phase A.3: add a WAV-file PlayerBackend so TTS engine and audio

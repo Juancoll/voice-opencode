@@ -389,6 +389,10 @@ def _wire_common_linux(
     from ..backends.linux_audio_paplay import player as paplay_player
     if (b := _try(paplay_player.PaplayPlayerBackend, "linux_audio_paplay")):
         out["player"] = b
+    # Voice pipeline: TTS (Piper) — common backend, also used on Windows.
+    from ..backends.common_piper import tts as piper_tts
+    if (b := _try(piper_tts.PiperTTSBackend, "common_piper.tts")):
+        out["tts"] = b
     # Notify: works everywhere with libnotify.
     from ..backends.linux_dialog_kde import knotify_backend
     if (b := _try(knotify_backend.LibnotifyBackend, "linux_dialog_kde.notify")):

@@ -89,6 +89,7 @@ session. Refresh this whenever something material changes.
 
 - `rec.pid`     — arecord PID, presence ⇒ recording
 - `rec.wav`     — last raw capture
+- `tts.wav`     — last Piper synthesis (played by the player backend)
 - `state`       — current pipeline phase (`idle|recording|thinking|speaking|error`)
 - `paused`      — sentinel; if present, F9 is ignored
 - `agent`       — sentinel; if present, MCP tool is currently acting (F9 also ignored)

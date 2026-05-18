@@ -1,26 +1,39 @@
 """
-Text-to-speech via Piper (`piper-tts` binary) piped into PipeWire/PulseAudio.
+Text-to-speech orchestration.
 
-A Piper voice is two files: ``<stem>.onnx`` + ``<stem>.onnx.json``. The
-JSON sidecar carries sample rate and the speaker map for multi-speaker
-models. We read it to build the right ``paplay`` command and to know
-whether to pass ``--speaker``.
+Splits cleanly into three responsibilities:
+
+1. **Voice metadata** (``VoiceInfo``, ``voice_info``, ``resolve_voice``,
+   ``list_voices``, ``current_voice``) — pure-Python parsing of the
+   ``<voice>.onnx.json`` sidecar. Lives here because both the CLI
+   (``voice voices``) and the tray (voice picker) want it as a tiny
+   Python API, not as a backend method.
+
+2. **Markdown cleaning** (``clean_for_tts``) — domain logic that runs
+   regardless of which TTS engine produces the audio. Has its own
+   extensive test suite.
+
+3. **Speaking** (``speak``) — composes ``platform.tts.synthesize(...)``
+   with ``platform.player.play_wav(...)``. The intermediate WAV lives
+   in ``STATE_DIR`` so a wedged player can be diagnosed offline.
+
+The actual piper-tts invocation lives in
+``backends/common_piper/tts.py``; the actual paplay invocation lives
+in ``backends/linux_audio_paplay/player.py``. Swapping either is a
+matter of wiring a different backend in ``platform/__init__.py``.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import platform as _plat
 from .config import settings
 from .logging import log
-from .paths import LOGS_DIR, VOICES_DIR
-
-PIPER_BIN = os.environ.get("PIPER_BIN", "piper-tts")
+from .paths import STATE_DIR, VOICES_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -90,41 +103,27 @@ def current_voice() -> VoiceInfo:
 
 
 # ---------------------------------------------------------------------------
-# Speaking
+# Markdown cleaning (see test_tts_cleaning.py for the contract)
 # ---------------------------------------------------------------------------
-# Markdown patterns we strip before TTS. Order matters: fences before inline
-# code, images before links (image syntax is a superset of link), emphasis
-# before generic punctuation cleanup. Anything reachable by the LLM that
-# would otherwise be read out as "asterisco asterisco" goes here.
+# Order matters: fences before inline code, images before links (image
+# syntax is a superset of link), emphasis before generic punctuation
+# cleanup. Anything reachable by the LLM that would otherwise be read
+# out as "asterisco asterisco" goes here.
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_RE = re.compile(r"`([^`]+)`")
-# ![alt](url) — keep the alt text only.
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
-# [text](url) — keep the visible text, drop the URL.
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
-# Reference-style link definitions on their own line: [foo]: http://...
 _LINK_REF_RE = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.MULTILINE)
-# Bare URLs (http(s)://...) — replace by "enlace" so TTS does not spell them.
 _BARE_URL_RE = re.compile(r"https?://\S+")
-# Bold ** ** and __ __ — unwrap. Non-greedy to avoid swallowing whole paragraphs.
 _BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _BOLD_UNDER_RE = re.compile(r"__(.+?)__", re.DOTALL)
-# Italic * * and _ _ — unwrap. Must run AFTER bold so we don't break **x**.
-# For * we require a non-* neighbour to avoid eating list bullets and ***.
 _ITALIC_STAR_RE = re.compile(r"(?<!\*)\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)")
 _ITALIC_UNDER_RE = re.compile(r"(?<!\w)_(?!\s)([^_\n]+?)(?<!\s)_(?!\w)")
-# Strikethrough ~~text~~ — unwrap.
 _STRIKE_RE = re.compile(r"~~(.+?)~~", re.DOTALL)
-# Leading list / heading / blockquote markers per line.
-# Covers '#', '>', '-', '*', '+', and ordered '1.' / '12)' bullets.
 _MD_PREFIX_RE = re.compile(r"^\s*(?:[#>]+|[-*+]|\d{1,3}[.)])\s+", re.MULTILINE)
-# Markdown table separator rows: | --- | :---: | ---: |
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", re.MULTILINE)
-# Pipe characters in remaining table rows — replace by comma for fluency.
 _TABLE_PIPE_RE = re.compile(r"\s*\|\s*")
-# Simple HTML tags that occasionally sneak through.
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-# Whitespace collapse — must be last.
 _WS_RE = re.compile(r"\s+")
 
 
@@ -164,12 +163,16 @@ def clean_for_tts(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def speak(text: str) -> None:
-    """Synthesise ``text`` with the current voice and play it.
+# ---------------------------------------------------------------------------
+# Speaking — orchestrates platform.tts + platform.player
+# ---------------------------------------------------------------------------
+_TTS_WAV: Path = STATE_DIR / "tts.wav"
 
-    A wedged ``paplay`` would otherwise freeze the pipeline at
-    ``speaking`` forever; we cap with a generous timeout so the state
-    machine can recover.
+
+def speak(text: str) -> None:
+    """Clean ``text``, synthesise via the wired TTS backend, play via
+    the wired player backend. Bounded by a 60 s play-timeout so a
+    wedged sink cannot freeze the pipeline at ``speaking`` forever.
     """
     text = clean_for_tts(text)
     if not text:
@@ -177,58 +180,15 @@ def speak(text: str) -> None:
         return
 
     voice = current_voice()
-    if not voice.path.exists():
-        raise FileNotFoundError(f"Piper voice not found: {voice.path}")
     log(f"TTS ← {text[:80]!r}{'…' if len(text) > 80 else ''}")
 
-    piper_cmd: list[str] = [PIPER_BIN, "--model", str(voice.path), "--output-raw"]
-    if voice.is_multispeaker:
-        piper_cmd += ["--speaker", str(settings.speaker_id)]
-
-    player_cmd = [
-        "paplay",
-        "--raw",
-        f"--rate={voice.sample_rate}",
-        "--format=s16le",
-        "--channels=1",
-    ]
-
-    # Open log files for the lifetime of the child processes only, then close.
-    piper_log = (LOGS_DIR / "piper.log").open("ab")
-    player_log = (LOGS_DIR / "player.log").open("ab")
+    speaker = settings.speaker_id if voice.is_multispeaker else None
     try:
-        piper = subprocess.Popen(
-            piper_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=piper_log,
-        )
-        player = subprocess.Popen(
-            player_cmd,
-            stdin=piper.stdout,
-            stderr=player_log,
-        )
-        # Free our copy of piper.stdout so the player gets EOF on piper exit.
-        if piper.stdout is not None:
-            piper.stdout.close()
-        assert piper.stdin is not None
-        try:
-            piper.stdin.write(text.encode("utf-8"))
-        finally:
-            piper.stdin.close()
-        # 60s should cover any sane reply length.
-        try:
-            player.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            log("paplay timed out; killing TTS chain.")
-            player.kill()
-            piper.kill()
-        try:
-            piper.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            piper.kill()
-        if piper.returncode not in (0, None):
-            log(f"piper exit code {piper.returncode}")
-    finally:
-        piper_log.close()
-        player_log.close()
+        _plat.tts.synthesize(text, voice.stem, _TTS_WAV, speaker_id=speaker)
+    except Exception as e:
+        log(f"TTS synthesis failed: {e}")
+        return
+    try:
+        _plat.player.play_wav(_TTS_WAV, timeout_s=60.0)
+    except Exception as e:
+        log(f"TTS playback failed: {e}")
