@@ -140,6 +140,38 @@ class WlrootsScreenBackend:
             raise BackendError(f"grim failed: {err.strip()}")
         return out_path
 
+    def _active_window_monitor_name(self) -> str | None:
+        """Resolve the monitor *containing the currently focused window*.
+
+        This is the monitor the user is actually looking at, which is
+        what we want for the per-turn screenshot. The naive alternative
+        — ``focused_monitor()`` — follows the *cursor* / last focus,
+        and so the screenshot can silently capture the wrong screen
+        whenever the cursor or a floating overlay (e.g. our own HUD)
+        crosses a monitor boundary. In production this manifested as
+        the model describing UI the user could not see.
+
+        Hyprland exposes ``activewindow.monitor`` as a numeric id; we
+        cross-reference it with ``hyprctl monitors`` to get the name
+        that ``grim -o`` expects.
+        """
+        if not self._has_hyprctl:
+            return None
+        try:
+            rc, out, _ = _run(["hyprctl", "-j", "activewindow"], timeout=2)
+            if rc != 0 or not out.strip():
+                return None
+            w = json.loads(out)
+            mon_id = w.get("monitor")
+            if mon_id is None:
+                return None
+            for m in self.list_monitors():
+                if m.id == int(mon_id):
+                    return m.name
+        except Exception as e:  # pragma: no cover — defensive
+            log(f"active-window monitor resolution failed: {e}")
+        return None
+
     def capture_monitor(
         self, out_path: Path, monitor: Monitor | str | None = None,
     ) -> Path:
@@ -149,8 +181,14 @@ class WlrootsScreenBackend:
         elif isinstance(monitor, str):
             name = monitor
         else:
-            mon = self.focused_monitor()
-            name = mon.name if mon else None
+            # Prefer the monitor that holds the active window — the one
+            # the user is actually typing into. Fall back to the cursor-
+            # following "focused" monitor only if no active window can
+            # be resolved (e.g. nothing is focused).
+            name = self._active_window_monitor_name()
+            if not name:
+                mon = self.focused_monitor()
+                name = mon.name if mon else None
         args = ["-o", name] if name else []
         return self._grim(args, out_path)
 

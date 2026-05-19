@@ -3,6 +3,66 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-20 — Screenshot captures the *right* monitor + HUD parked during grim (ADR-0028)
+
+Live test right after ADR-0027 surfaced two stacked bugs in the
+per-turn screenshot path:
+
+1. **Wrong monitor.** ``capture_monitor(None)`` resolved the target
+   via ``focused_monitor()``, which reads ``focused`` from
+   ``hyprctl monitors`` — a flag that follows the cursor / last
+   focus, not the active window. Cursor drifts to the other head
+   or the new floating HUD touches it → grim grabs the wrong head.
+   The model proceeded to describe UI the user could not see.
+2. **HUD bleed-through.** The HUD widget is floating + pinned +
+   always-on-top during `thinking` / `speaking`, so its pixels
+   ("🧠 Pensando…" / "🔊 Respondiendo") landed inside the PNG.
+   The model OCR'd them and either parroted them back or treated
+   them as part of the user's context.
+
+Fixes (both narrow, both best-effort with graceful X11 fallback):
+
+* ``WlrootsScreenBackend._active_window_monitor_name()``:
+  reads ``hyprctl -j activewindow``, extracts the numeric
+  ``monitor`` id, cross-references ``hyprctl -j monitors`` to get
+  the name grim expects.
+* ``capture_monitor(monitor=None)`` now prefers the active-window
+  monitor and only falls back to ``focused_monitor()`` when no
+  active window can be resolved. Explicit ``monitor=`` arguments
+  still bypass both probes (CLI / MCP callers untouched).
+* New ``screenshot._hud_offscreen()`` context manager: hyprctl-
+  dispatches the HUD to (-99999, -99999) before the grim call,
+  sleeps 30ms so Hyprland commits the move, and yields. Does NOT
+  restore the position on exit — the pipeline always issues a
+  ``turn_update(...)`` immediately after ``capture()`` (success
+  *or* error path) and every ``turn_update`` re-pins the widget
+  to the bottom-right via ``TurnHUD._apply_hyprland_rules``.
+* ``capture()`` wraps the existing ``capture_to(...)`` in that
+  context manager. ``settings.screenshot = False`` short-circuits
+  before touching the HUD (verified by test).
+* On any compositor without ``hyprctl``, both helpers degrade to
+  silent no-ops — same behaviour as before ADR-0028.
+
+Tests: new file ``tests/test_screen_active_monitor.py`` with 8
+tests covering (a) DP-4 wins when activewindow.monitor=1 even if
+DP-3 has focused=True, (b) fallback to focused_monitor when
+activewindow is empty, (c) explicit ``monitor=`` bypasses
+resolution and skips both hyprctl probes, (d) defensive ``None``
+when activewindow lacks the monitor key, (e) HUD parker dispatches
+exactly once with negative coords, (f) silent no-op without
+hyprctl on PATH, (g) ``capture()`` runs grim strictly inside the
+parker context, (h) ``settings.screenshot=False`` short-circuits
+the whole thing.
+
+ADR-0028 written documenting both bugs, the active-window-vs-cursor
+distinction, the rejected alternatives (window-only default,
+all-monitors default, disable screenshots, socket-based HUD hide,
+post-process masking), and the deliberate no-restore decision.
+
+452 tests / ruff / mypy green. The pipeline now (a) captures the
+monitor the user is actually looking at and (b) does it without the
+HUD photo-bombing the shot.
+
 ## 2026-05-19 — F9 mid-turn cancels (ADR-0027); kill every libnotify toast from the pipeline
 
 The HUD shipped in ADR-0026 fixed the per-turn display, but live

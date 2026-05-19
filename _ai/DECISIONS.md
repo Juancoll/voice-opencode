@@ -7,6 +7,116 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0028 — Screenshot captures the monitor of the active *window*, and hides the HUD during grim
+
+Date: 2026-05-20
+
+### Context
+
+User report, immediately after ADR-0027 landed: "el agente me acaba
+de describir una pantalla que no se ve". The model was confidently
+narrating UI from a monitor the user was not looking at, on a
+dual-head Hyprland setup (DP-3 + DP-4, 2560×1440 each).
+
+Two distinct bugs were stacked on top of each other:
+
+1. **Wrong monitor.** ``WlrootsScreenBackend.capture_monitor()`` with
+   no explicit monitor argument fell back to ``focused_monitor()``,
+   which reads the ``focused`` flag from ``hyprctl monitors``. That
+   flag follows the **cursor / last focus**, not the active window.
+   A common trigger: the cursor drifts to the other monitor (or any
+   floating pinned overlay — like our brand-new HUD from ADR-0026 —
+   briefly touches it), so grim grabs the wrong head and the model
+   hallucinates whatever is on the unfocused screen.
+2. **HUD bleed-through.** Even when grim picks the right monitor,
+   the HUD is a floating, pinned, always-on-top widget present
+   throughout ``thinking`` and ``speaking``. The PNG sent to the
+   model includes "🧠 Pensando…" / "🔊 Respondiendo" pixels. The
+   model OCRs them, either parrots them back or treats them as part
+   of the user's context. We just spent an ADR putting the HUD on
+   top of everything; now it's contaminating the very signal it was
+   supposed to support.
+
+### Decision
+
+Two narrow, independent fixes:
+
+**1. Resolve the capture monitor from the active window, not the
+cursor.** New private helper
+``WlrootsScreenBackend._active_window_monitor_name()`` reads
+``hyprctl -j activewindow``, looks up the numeric ``monitor`` id,
+and cross-references ``hyprctl -j monitors`` to get the name grim
+expects. ``capture_monitor(monitor=None)`` calls it first and falls
+back to the previous ``focused_monitor()`` behaviour only when no
+active window can be resolved (e.g. nothing is focused). An
+explicit ``monitor=`` argument still bypasses both probes.
+
+**2. Park the HUD off-screen for the duration of grim.** New
+``screenshot._hud_offscreen()`` context manager dispatches
+``hyprctl movewindowpixel exact -99999 -99999, title:voice-opencode-hud``
+before yielding, sleeps 30ms so Hyprland commits the move before grim
+sweeps the framebuffer, and yields. We deliberately do **not**
+restore the HUD's position on exit: the pipeline always calls
+``turn_update(...)`` immediately after ``capture()`` (either
+"🔊 Respondiendo" on success or "❌ opencode" on failure), and every
+``turn_update`` re-runs ``TurnHUD._apply_hyprland_rules`` which
+re-pins the widget into the bottom-right of the active monitor.
+``capture()`` wraps the existing ``capture_to(...)`` call in that
+context manager.
+
+Both fixes are best-effort. On X11 / other compositors without
+``hyprctl`` they degrade to no-ops: the resolve helper returns
+``None`` (so we fall back to focused_monitor), and the HUD parker
+silently skips the dispatch (HUD may appear in the shot, same as
+before this ADR existed).
+
+### Alternatives
+
+* **scope="window" by default.** Captures the focused window only,
+  no monitor context. Considered and offered to the user; rejected
+  because they want to keep peripheral context (terminal output,
+  open browser tab next to the editor, etc.).
+* **scope="all" by default.** Stitched 5120×1440 PNG, ~1.5 MB.
+  Never wrong, always slow, and the model has to figure out which
+  half matters. Worst tradeoff.
+* **Disable screenshots entirely.** Already a config flag
+  (``settings.screenshot = False``); didn't want to be the default
+  because text-only voice loses a lot of "look at this and tell me
+  what to do" use cases.
+* **Have the tray hide the HUD via a socket op.** Adds a synchronous
+  round-trip (pipeline → tray → Qt event loop → tray → pipeline)
+  per capture. ``hyprctl dispatch`` is fire-and-forget and just as
+  effective. We accept that the HUD is briefly invisible during the
+  grim call as a feature, not a bug.
+* **Compute current HUD geometry, ``hyprctl getwindows``, mask the
+  region in post-processing.** Way too much complexity for an issue
+  a 30ms sleep + offscreen move solves.
+
+### Consequences
+
+* `capture()` is now ~30ms slower in steady state (the deliberate
+  ``time.sleep(0.03)`` to let Hyprland commit the move). Negligible
+  against the 25s opencode round-trip that triggered this report.
+* If the pipeline somehow dies between ``capture()`` and the next
+  ``turn_update`` (which would be a separate bug), the HUD stays
+  off-screen until the next ``turn_start``. Acceptable — the HUD is
+  non-essential UX and the next F9 brings it back.
+* New file ``tests/test_screen_active_monitor.py``: 8 tests covering
+  the active-window resolution (DP-4 wins when activewindow.monitor=1
+  even if DP-3 is "focused"), the focused fallback when nothing is
+  focused, explicit ``monitor=`` bypassing both probes, the
+  defensive ``None`` when ``activewindow`` lacks a ``monitor`` key,
+  the HUD parker dispatching once with negative coords, the silent
+  no-op when ``hyprctl`` is missing, ``capture()`` strictly running
+  grim inside the parker context, and the early-return when
+  ``settings.screenshot`` is False.
+* The MCP ``capture_screen`` tool and the CLI ``voice desktop
+  capture`` and ``voice ocr find`` also benefit transparently from
+  the active-window resolution — they all funnel through
+  ``capture_monitor``.
+
+---
+
 ## ADR-0027 — F9-while-busy cancels the active turn (no more "Ocupado" toast)
 
 Date: 2026-05-19
