@@ -3,6 +3,33 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — HUD floats + pins on Hyprland via runtime hyprctl dispatch
+
+The HUD widget (previous commit) showed up tile-sized in whatever
+workspace Hyprland dropped it in, because Hyprland tiles new windows
+by default and ``windowrule`` syntax changed between versions (0.55
+renamed ``windowrulev2`` and broke the comma-grammar). We tried
+editing ``~/.config/hypr/conf.d/voice.conf`` and it produced parse
+errors on the user's compositor.
+
+Switched to a runtime-only approach: when ``TurnHUD.show_msg()`` is
+called for the first time, a single-shot 80ms timer fires
+``_apply_hyprland_rules()`` which shells out to ``hyprctl dispatch``
+four times against ``title:voice-opencode-hud``:
+
+  setfloating          -> float
+  pin                  -> visible on every workspace
+  resizewindowpixel    -> exact 520x96
+  movewindowpixel      -> bottom-right of the active monitor
+
+No edits to the user's Hyprland config, no dependency on windowrule
+syntax stability. ``shutil.which("hyprctl")`` gates the whole thing
+so X11 / other compositors are a clean no-op (the widget falls back
+to whatever position Qt picked).
+
+Verified live: ``hyprctl clients`` reports
+``size=[520,96] floating=True pinned=True at=[2016,1320] monitor=1``.
+
 ## 2026-05-19 — Replace libnotify per-turn bubble with PyQt6 HUD (ADR-0026)
 
 Live incident: on Plasma 6 the per-turn notification gets stuck on a

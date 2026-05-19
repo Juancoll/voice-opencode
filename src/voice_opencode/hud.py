@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +47,7 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QSocketNotifier,
     Qt,
+    QTimer,
     pyqtSlot,
 )
 from PyQt6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter
@@ -75,13 +78,22 @@ class TurnHUD(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-            | Qt.WindowType.BypassWindowManagerHint,
+            | Qt.WindowType.WindowDoesNotAcceptFocus,
         )
+        # Identify the window so Hyprland window rules can match it:
+        # see install.sh and ~/.config/hypr/conf.d/voice.conf — we
+        # rely on ``class:^(voice-opencode-hud)$`` to force float +
+        # pin + exact size/position. setObjectName drives the
+        # Wayland app_id and X11 WM_CLASS via Qt.
+        self.setObjectName("voice-opencode-hud")
+        self.setWindowTitle("voice-opencode-hud")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        # Tool windows don't show in alt-tab; on Wayland the compositor
-        # decides positioning. On X11/Hyprland we get exact coords.
+        # NOTE: BypassWindowManagerHint was tempting (skips the WM
+        # entirely) but on Hyprland it makes the window unmanaged —
+        # we lose ``windowrulev2`` and end up at (0,0) with the
+        # default layout. Better to be a managed window with strict
+        # rules.
         self.resize(_HUD_W, _HUD_H)
 
         # --- layout ---
@@ -150,6 +162,11 @@ class TurnHUD(QWidget):
         self._reposition()
         if not self.isVisible():
             self.show()
+            # Hyprland tiles new windows by default; force float + pin
+            # + exact geometry via hyprctl now that the window exists.
+            # Done in a single-shot timer so Hyprland has a tick to
+            # register the new window before we address it by title.
+            QTimer.singleShot(80, self._apply_hyprland_rules)
             self._fade(0.0, 1.0)
         else:
             # Already visible: cancel any pending fade-out and snap to opaque.
@@ -182,6 +199,52 @@ class TurnHUD(QWidget):
         x = geo.right() - _HUD_W - _MARGIN
         y = geo.bottom() - _HUD_H - _MARGIN
         self.move(QPoint(x, y))
+
+    def _apply_hyprland_rules(self) -> None:
+        """Force Hyprland to treat the HUD as a small floating pinned
+        overlay in the bottom-right of the active monitor.
+
+        Done at runtime via ``hyprctl dispatch`` (no edits to the
+        user's ``hypr/conf.d``) because:
+
+        * Hyprland tiles new windows by default — without these calls
+          the widget shows up at full workspace size.
+        * ``windowrulev2`` syntax differs between Hyprland versions
+          (renamed to ``windowrule`` in 0.55, new ``= value``
+          grammar) and we don't want to silently break the user's
+          config.
+
+        Best-effort: if hyprctl is missing (X11, other compositor)
+        or any dispatch fails we just leave the window wherever Qt
+        put it. The widget is still visible, just not pinned.
+        """
+        if not shutil.which("hyprctl"):
+            return
+        sel = "title:voice-opencode-hud"
+        # Compute bottom-right of the active monitor.
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.geometry()  # absolute pixels, includes the monitor offset
+        x = geo.right() - _HUD_W - _MARGIN + 1
+        y = geo.bottom() - _HUD_H - _MARGIN + 1
+        for cmd in (
+            ("setfloating",   sel),
+            ("pin",           sel),
+            ("resizewindowpixel", f"exact {_HUD_W} {_HUD_H},{sel}"),
+            ("movewindowpixel",   f"exact {x} {y},{sel}"),
+        ):
+            try:
+                subprocess.run(
+                    ["hyprctl", "dispatch", *cmd],
+                    check=False, timeout=1.5,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                # Compositor not responsive; skip silently — the HUD
+                # is non-essential UX.
+                continue
 
     def _fade(self, start: float, end: float, *, then_hide: bool = False) -> None:
         self._anim.stop()
