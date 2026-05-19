@@ -493,6 +493,12 @@ OC_CFG_DIR="$HOME/.config/opencode"
 OC_CFG="$OC_CFG_DIR/opencode.json"
 mkdir -p "$OC_CFG_DIR"
 
+# The permission block below is REQUIRED for headless ``opencode serve``
+# mode. Without it, any MCP tool that writes outside the workspace
+# (typically capture_screen → \$XDG_RUNTIME_DIR/voice-opencode/) fires a
+# ``permission.asked`` bus event that has no TUI to answer, hanging every
+# voice turn until the 600 s HTTP timeout. See _ai/CHANGELOG.md
+# 2026-05-19.
 if [[ ! -f "$OC_CFG" ]]; then
     cat > "$OC_CFG" <<EOF
 {
@@ -503,16 +509,46 @@ if [[ ! -f "$OC_CFG" ]]; then
       "command": ["$ROOT/voice", "mcp", "serve"],
       "enabled": true
     }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "bash": "allow",
+    "task": "allow",
+    "external_directory": "allow",
+    "todowrite": "allow",
+    "question": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "repo_clone": "allow",
+    "repo_overview": "allow",
+    "lsp": "allow",
+    "doom_loop": "allow",
+    "skill": "allow"
   }
 }
 EOF
-    ok "Created $OC_CFG with voice_desktop MCP server."
-elif ! grep -q '"voice_desktop"' "$OC_CFG"; then
-    warn "$OC_CFG exists but doesn't reference voice_desktop."
-    warn "Add this to its 'mcp' object manually:"
-    warn '    "voice_desktop": {"type":"local","command":["'"$ROOT"'/voice","mcp","serve"],"enabled":true}'
+    ok "Created $OC_CFG with voice_desktop MCP + headless permission allow-list."
 else
-    ok "voice_desktop already present in $OC_CFG"
+    if ! grep -q '"voice_desktop"' "$OC_CFG"; then
+        warn "$OC_CFG exists but doesn't reference voice_desktop."
+        warn "Add this to its 'mcp' object manually:"
+        warn '    "voice_desktop": {"type":"local","command":["'"$ROOT"'/voice","mcp","serve"],"enabled":true}'
+    else
+        ok "voice_desktop already present in $OC_CFG"
+    fi
+    if ! grep -q '"external_directory"' "$OC_CFG"; then
+        warn "$OC_CFG is missing the 'permission.external_directory' rule."
+        warn "Without it, headless 'opencode serve' will hang on capture_screen."
+        warn "Add a top-level block manually:"
+        warn '    "permission": { "external_directory": "allow", "bash": "allow", ... }'
+        warn "See _ai/STATE.md → opencode integration for the full block."
+    else
+        ok "permission allow-list present in $OC_CFG"
+    fi
 fi
 
 # ---------- done -------------------------------------------------------------

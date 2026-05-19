@@ -51,7 +51,7 @@ _calls: deque[float] = deque(maxlen=_RATE_LIMIT * 4)
 # user was on a different one (e.g. typing into the opencode terminal
 # when the agent meant to fill a browser form).
 # ---------------------------------------------------------------------------
-_FOCUS_GUARD_TTL_S: float = 5.0
+_FOCUS_GUARD_TTL_S: float = 15.0
 _focus_state: dict[str, Any] = {"target": "", "expected_id": "", "ts": 0.0}
 
 

@@ -4,6 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
+# Import Wayland/Hyprland env from the user's graphical session so the
+# MCP server detects linux-hyprland (not linux-generic) and gets
+# screen capture + WM ops. HYPRLAND_INSTANCE_SIGNATURE is set per-login
+# by Hyprland's own `systemctl --user import-environment`; this line
+# is a belt-and-braces in case the unit starts before that runs.
+ExecStartPre=/bin/sh -c 'systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR DISPLAY 2>/dev/null || true'
 ExecStart=/usr/bin/opencode serve --port 4096 --hostname 127.0.0.1
 Restart=on-failure
 RestartSec=3

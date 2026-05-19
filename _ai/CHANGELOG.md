@@ -3,6 +3,40 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — Bake the headless-permission + Hyprland-env fixes into install
+
+Follow-up to the previous entry: the workaround now lives in the repo
+so a fresh ``./install.sh`` on any machine gets it for free.
+
+- ``opencode-serve.service`` (the file shipped with the repo) gains the
+  ``ExecStartPre=systemctl --user import-environment …`` line that
+  pulls ``HYPRLAND_INSTANCE_SIGNATURE`` / ``WAYLAND_DISPLAY`` /
+  ``XDG_*`` / ``DISPLAY`` into the unit's environment before
+  ``opencode serve`` starts. Without this the MCP subprocess that
+  opencode spawns sees ``platform=linux-generic`` and loses screen
+  capture + Hyprland WM ops.
+- ``install.sh`` § 9 now writes ``~/.config/opencode/opencode.json``
+  with a full ``permission`` allow-list block (read/edit/glob/grep/
+  list/bash/task/external_directory/todowrite/question/webfetch/
+  websearch/repo_clone/repo_overview/lsp/doom_loop/skill all =
+  ``allow``). When the file already exists, the installer warns if
+  ``external_directory`` is missing instead of silently leaving a
+  broken setup.
+- ``src/voice_opencode/mcp_server.py``: ``_FOCUS_GUARD_TTL_S`` raised
+  from 5 s to 15 s. Observed in the wild that 5 s was tight enough
+  that the LLM kept hitting "refused: focus_window first" on the
+  *next* tool call after a 4-5 s deliberation, doubling the number of
+  round-trips. 15 s still covers any realistic window-switch scenario
+  (the user would have to manually re-focus within 15 s of the agent
+  having claimed focus). All tests still pass (the TTL test
+  monkeypatches the value to 0.01 anyway).
+- ``src/voice_opencode/opencode_client.py``: HTTP ``timeout=600`` →
+  ``timeout=60``. With the permission stall fixed, real turns return
+  in 5-30 s end-to-end. A 60 s ceiling means a regressing server
+  surfaces as an immediate ``Read timed out`` error in the tray
+  instead of a 10-minute silent hang.
+- 429 tests pass, ruff + mypy green.
+
 ## 2026-05-19 — Fix: headless opencode-serve stalled by permission prompts
 
 Symptom: every voice turn that ended up calling an MCP tool which

@@ -107,7 +107,7 @@ class Session:
         r = requests.post(
             f"{settings.opencode_url}/session/{self.id}/message",
             json={"parts": parts},
-            timeout=600,
+            timeout=60,
         )
         r.raise_for_status()
         data = r.json()
