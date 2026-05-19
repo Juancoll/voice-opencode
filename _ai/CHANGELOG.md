@@ -3,6 +3,40 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — Fix: headless opencode-serve stalled by permission prompts
+
+Symptom: every voice turn that ended up calling an MCP tool which
+writes under ``$XDG_RUNTIME_DIR/voice-opencode/`` (typically
+``capture_screen``) would hang the pipeline at ``thinking`` for the
+full 600s ``requests`` timeout, then fail with
+``HTTPConnectionPool ... Read timed out``.
+
+Root cause: opencode evaluates an ``external_directory`` permission
+rule for any file path outside its workspace. The default rule is
+``ask``, which in TUI mode pops a modal. In headless ``opencode
+serve`` mode there is no TUI to answer — the request publishes a
+``permission.asked`` bus event and blocks forever. Confirmed by
+``~/.local/share/opencode/log/`` tail showing
+``service=permission ... patterns=["/run/user/1000/voice-opencode/*"]
+asking`` right before each stall.
+
+Fix: ``~/.config/opencode/opencode.json`` now declares an explicit
+``permission`` block that pre-allows every category (read/edit/glob/
+grep/list/bash/task/external_directory/todowrite/question/webfetch/
+websearch/repo_clone/repo_overview/lsp/doom_loop/skill). After the
+change, the same prompt that previously hung for 10 min returns in
+~18 s with screenshot + full tool loop.
+
+Also: ``~/.config/systemd/user/opencode-serve.service`` now runs
+``systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE
+WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR
+DISPLAY`` as ``ExecStartPre``, so the MCP subprocess launched by
+opencode detects ``platform=linux-hyprland`` (not the degraded
+``linux-generic`` fallback). Verified via ``platform_info``.
+
+STATE.md updated with the required ``opencode.json`` shape and the
+underlying reasoning.
+
 ## 2026-05-19 — ADR-0025: focus guard + live per-turn notification
 
 - New capability ``NOTIFY_REPLACE``. ``LibnotifyBackend`` advertises

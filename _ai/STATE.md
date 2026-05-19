@@ -114,19 +114,37 @@ Plus, in the repo:
 ## opencode integration
 
 `~/.config/opencode/opencode.json` registers our MCP server as
-`voice_desktop`:
+`voice_desktop` AND **must declare a permission policy that pre-allows
+everything**, otherwise the headless server stalls indefinitely on
+``permission.asked`` events that nobody can answer (no TUI is
+attached):
 
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "voice_desktop": {
       "type": "local",
       "command": ["/home/juan/git/voice-opencode/voice", "mcp", "serve"],
       "enabled": true
     }
+  },
+  "permission": {
+    "read": "allow", "edit": "allow", "glob": "allow", "grep": "allow",
+    "list": "allow", "bash": "allow", "task": "allow",
+    "external_directory": "allow",
+    "todowrite": "allow", "question": "allow",
+    "webfetch": "allow", "websearch": "allow",
+    "repo_clone": "allow", "repo_overview": "allow",
+    "lsp": "allow", "doom_loop": "allow", "skill": "allow"
   }
 }
 ```
+
+The ``external_directory`` rule is the critical one: without it, any
+MCP tool that writes to ``$XDG_RUNTIME_DIR/voice-opencode/`` (e.g.
+``capture_screen``) causes opencode to fire a permission prompt that
+times out after 600s, leaving the pipeline frozen on ``thinking``.
 
 opencode launches the subprocess on-demand and keeps it alive between
 messages. Tools surface to the model as `voice_desktop_<name>`
