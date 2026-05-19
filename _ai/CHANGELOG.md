@@ -3,6 +3,38 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — Abort runaway agent + surface errors in the turn bubble
+
+Live incident: 60s HTTP timeout fired mid-turn while the model was in a
+desktop-control tool loop. The Python client gave up, but ``opencode
+serve`` kept the run alive — the agent kept calling ``click_mouse`` /
+``press_key`` / ``capture_screen`` for **5+ minutes** after the user
+thought the turn was over (observed up to ``23:16:46`` for a turn that
+"ended" at ``23:11:20``). At one point it even fired ``super+l`` which
+on most WMs locks the screen. Root cause: nothing on our side tells the
+server to stop, and ``mcp stop`` only kills the MCP subprocess — the
+model retries against a dead server and keeps thinking.
+
+Fixes:
+
+- ``opencode_client.Session.ask`` timeout 60s → 180s (typical turns
+  are 5–30s; multi-step desktop turns can hit 60–120s; 180s leaves
+  headroom while still failing-fast on real hangs).
+- New ``Session.abort()`` posts ``/session/<id>/abort`` (server-side
+  cancel). Called automatically by ``ask()`` on ``requests.Timeout``
+  and by ``pipeline.stop_and_run`` on any opencode exception, so the
+  tool loop dies with the HTTP turn.
+- ``pipeline.stop_and_run`` error/empty branches now call
+  ``turn_update("❌ …", str(e)[:120])`` **before** ``turn_end()`` so
+  the persistent turn bubble shows the actual failure instead of
+  leaving a stale "🔊 Respondiendo …" frozen on screen (the bug the
+  user spotted: stale toast surviving across turns).
+- ``cli.cmd_mcp("stop")`` now also aborts the active session before
+  killing the MCP processes, so the tray's "Detener agente (MCP)"
+  truly stops everything.
+
+429 tests / ruff / mypy still green.
+
 ## 2026-05-19 — Bake the headless-permission + Hyprland-env fixes into install
 
 Follow-up to the previous entry: the workaround now lives in the repo

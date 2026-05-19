@@ -258,7 +258,18 @@ def cmd_mcp(args: list[str]) -> int:
     if sub == "stop":
         import signal
         import subprocess as sp
-        # Find any running 'voice_opencode.mcp_server' or 'voice mcp serve' processes.
+        # 1. Abort the active opencode session so the model stops calling
+        #    tools mid-loop (otherwise killing the MCP server only causes
+        #    every next tool call to fail; the model keeps thinking).
+        try:
+            from .opencode_client import Session
+            sid = Session.current_id()
+            if sid:
+                Session(sid).abort()
+                print(f"aborted session {sid}")
+        except Exception as e:
+            print(f"abort failed: {e}")
+        # 2. Find any running 'voice_opencode.mcp_server' or 'voice mcp serve' processes.
         try:
             r = sp.run(
                 ["pgrep", "-f", "voice_opencode.*mcp"],

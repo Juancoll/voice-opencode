@@ -104,11 +104,19 @@ class Session:
             log(f"Attaching screenshot ({screenshot.stat().st_size} bytes).")
 
         log(f"POST /session/{self.id}/message")
-        r = requests.post(
-            f"{settings.opencode_url}/session/{self.id}/message",
-            json={"parts": parts},
-            timeout=60,
-        )
+        # 180s: long enough for multi-tool agent loops (observed: typical
+        # turn 5-30s, complex desktop-control 60-120s), short enough to
+        # fail-fast on real hangs. On timeout the pipeline calls abort()
+        # so the server stops the runaway loop instead of burning credits.
+        try:
+            r = requests.post(
+                f"{settings.opencode_url}/session/{self.id}/message",
+                json={"parts": parts},
+                timeout=180,
+            )
+        except requests.exceptions.Timeout:
+            self.abort()
+            raise
         r.raise_for_status()
         data = r.json()
         chunks: list[str] = [
@@ -116,3 +124,22 @@ class Session:
             if p.get("type") == "text" and p.get("text")
         ]
         return "\n".join(chunks).strip()
+
+    def abort(self) -> bool:
+        """Tell opencode server to stop the current run for this session.
+
+        Used by the pipeline on HTTP timeout (so the agent's tool loop
+        doesn't keep clicking/typing after we gave up waiting) and by
+        the tray's "Detener agente" entry. Best-effort: server returns
+        200 even when there is nothing to abort. Logged, never raises.
+        """
+        try:
+            r = requests.post(
+                f"{settings.opencode_url}/session/{self.id}/abort",
+                timeout=5,
+            )
+            log(f"POST /session/{self.id}/abort -> {r.status_code}")
+            return r.ok
+        except Exception as e:
+            log(f"abort error: {e}")
+            return False

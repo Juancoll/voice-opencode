@@ -209,6 +209,7 @@ def stop_and_run() -> None:
         wav = audio.stop()
         if wav is None:
             set_state("idle")
+            turn_update("🤷 Sin audio", "")
             turn_end()
             return
 
@@ -222,11 +223,13 @@ def stop_and_run() -> None:
             log(f"STT error: {e}")
             notify("❌ Error STT", str(e), urgency="critical")
             set_state("error")
+            turn_update("❌ Error STT", str(e)[:120])
             turn_end()
             return
         if not text:
             notify("🤷 Nada que transcribir", "")
             set_state("idle")
+            turn_update("🤷 Nada que transcribir", "")
             turn_end()
             return
 
@@ -234,17 +237,24 @@ def stop_and_run() -> None:
 
         # 2. Ask opencode (with optional screenshot)
         shot = capture()
+        session = Session.get_or_create()
         try:
-            reply = Session.get_or_create().ask(text, screenshot=shot)
+            reply = session.ask(text, screenshot=shot)
         except Exception as e:
             log(f"opencode error: {e}")
+            # Make sure the server stops the runaway tool loop even if
+            # ask() already called abort() on Timeout — extra POST is
+            # cheap and idempotent.
+            session.abort()
             notify("❌ opencode", str(e), urgency="critical")
             set_state("error")
+            turn_update("❌ opencode", str(e)[:120])
             turn_end()
             return
         if not reply:
             notify("🤐 Sin respuesta", "")
             set_state("idle")
+            turn_update("🤐 Sin respuesta", "")
             turn_end()
             return
 
@@ -258,6 +268,7 @@ def stop_and_run() -> None:
             log(f"TTS error: {e}")
             notify("❌ Error TTS", str(e), urgency="critical")
             set_state("error")
+            turn_update("❌ Error TTS", str(e)[:120])
             turn_end()
             return
 
