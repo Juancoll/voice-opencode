@@ -147,29 +147,6 @@ class NotifyBackend(Protocol):
         self, title: str, body: str = "", urgency: str = "normal",
     ) -> None: ...
 
-    # Optional: replace-id support for "live" notifications that update
-    # in place instead of stacking. Backends that don't support it
-    # (e.g. macOS Notification Center) should raise NotSupportedError;
-    # callers MUST gate on ``NOTIFY_REPLACE``.
-    def show_persistent(
-        self,
-        title: str,
-        body: str = "",
-        urgency: str = "normal",
-        replace_id: int = 0,
-    ) -> int:
-        """Show or update a notification. Returns the notification id.
-
-        If ``replace_id`` is nonzero, the existing notification with
-        that id is updated in place; otherwise a new one is created.
-        Use ``dismiss(id)`` to close it explicitly.
-        """
-        ...
-
-    def dismiss(self, notification_id: int) -> None:
-        """Close a notification by id. No-op if already gone."""
-        ...
-
 
 @runtime_checkable
 class DialogBackend(Protocol):

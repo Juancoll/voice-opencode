@@ -1,34 +1,27 @@
 """
-Desktop notifications — shim over ``platform.notify``.
+Desktop notifications + per-turn HUD client.
 
-Best-effort: never raises, always returns ``None``. Controlled by the
-``notify`` config flag so users can mute toasts without code changes.
+Two surfaces:
 
-The actual ``notify-send`` / equivalent invocation lives in whichever
-``NotifyBackend`` the platform layer wired for this host (currently
-``LibnotifyBackend`` on Linux). Keeping a thin shim here means the
-two existing call sites (``pipeline.py``, ``cli.py``) keep their
-``from .notify import notify`` import and short signature without
-having to reach into ``voice_opencode.platform`` themselves — and the
-``settings.notify`` mute is enforced in exactly one place.
+* ``notify(title, body)`` — one-shot toasts via libnotify
+  (``platform.notify``). Used for errors and incidental events
+  outside the active turn (busy, paused, no-audio).
 
-Turn notification (ADR-0025): the pipeline opens one persistent
-notification at the start of a turn (recording → thinking → speaking)
-and the MCP server updates its body with each tool call so the user
-sees what the agent is doing in real time. The id is persisted in
-``$XDG_RUNTIME_DIR/voice-opencode/turn.notify-id`` so the MCP server
-process (separate from the pipeline process) can replace the same
-notification instead of opening a parallel one.
+* ``turn_start`` / ``turn_update`` / ``turn_end`` — drive the in-
+  process ``TurnHUD`` widget (see ``hud.py``) via a Unix socket
+  owned by the tray. The HUD lives as long as the tray does and
+  guarantees in-place updates without the KDE/Plasma replace-id bug
+  we hit with ``notify-send -r`` (ADR-0026).
+
+Both are best-effort: never raise, always honour ``settings.notify``
+so the user can mute everything with one config flag.
 """
 
 from __future__ import annotations
 
+from . import hud
 from . import platform as _plat
 from .config import settings
-from .paths import STATE_DIR
-from .platform import capabilities as _cap
-
-_TURN_ID_FILE = STATE_DIR / "turn.notify-id"
 
 
 def notify(title: str, body: str = "", urgency: str = "normal") -> None:
@@ -46,77 +39,50 @@ def notify(title: str, body: str = "", urgency: str = "normal") -> None:
 
 
 # ---------------------------------------------------------------------------
-# Turn notification helpers (ADR-0025).
+# Turn HUD helpers (ADR-0026).
 # ---------------------------------------------------------------------------
-def _read_turn_id() -> int:
-    try:
-        return int(_TURN_ID_FILE.read_text().strip())
-    except (OSError, ValueError):
-        return 0
-
-
-def _write_turn_id(nid: int) -> None:
-    try:
-        _TURN_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _TURN_ID_FILE.write_text(str(nid))
-    except OSError:
-        pass
-
-
-def _clear_turn_id() -> None:
-    try:
-        _TURN_ID_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
-
+# The HUD is a single widget hosted by the tray. We address it through
+# its Unix socket; if the tray is down the calls silently no-op and
+# the pipeline keeps running (the user already gets the toast errors
+# via ``notify()`` above).
+#
+# Icons are emoji so the HUD doesn't need an icon theme and matches
+# the rest of the project (TTS, logs, status labels).
 
 def turn_start(title: str, body: str = "") -> None:
-    """Open or refresh the per-turn persistent notification.
-
-    Idempotent: if a notification id already exists for this turn,
-    the body is updated in place. Falls back to a regular toast if
-    the backend doesn't support replace-id."""
+    """Open the per-turn HUD with an initial title + body."""
     if not settings.notify:
         return
-    if not _plat.supported(_cap.NOTIFY_REPLACE):
-        notify(title, body, urgency="critical")
-        return
-    try:
-        nid = _plat.notify.show_persistent(
-            title, body, urgency="critical",
-            replace_id=_read_turn_id(),
-        )
-        if nid > 0:
-            _write_turn_id(nid)
-    except Exception:
-        pass
+    icon, label = _split_emoji(title)
+    hud.send("show", icon=icon, title=label, subtitle=body)
 
 
 def turn_update(title: str, body: str = "") -> None:
-    """Update the existing turn notification body. No-op if no turn
-    is active (no id on disk)."""
+    """Replace the HUD contents in place. Same UX as ``turn_start``."""
     if not settings.notify:
         return
-    if not _plat.supported(_cap.NOTIFY_REPLACE):
-        return
-    nid = _read_turn_id()
-    if nid <= 0:
-        return
-    try:
-        _plat.notify.show_persistent(
-            title, body, urgency="critical", replace_id=nid,
-        )
-    except Exception:
-        pass
+    icon, label = _split_emoji(title)
+    hud.send("update", icon=icon, title=label, subtitle=body)
 
 
 def turn_end() -> None:
-    """Close the turn notification, if any. Always safe to call."""
-    nid = _read_turn_id()
-    if nid <= 0:
-        return
-    try:
-        _plat.notify.dismiss(nid)
-    except Exception:
-        pass
-    _clear_turn_id()
+    """Hide the HUD. Always safe to call (no-op if not visible)."""
+    hud.send("hide")
+
+
+def _split_emoji(title: str) -> tuple[str, str]:
+    """Split ``"🎙 Grabando…"`` -> ``("🎙", "Grabando…")``.
+
+    Callers use leading emojis for status; the HUD renders the icon
+    in a dedicated column for a cleaner look. If no leading emoji is
+    detected we fall back to a bullet so the icon column is never
+    empty.
+    """
+    title = title.strip()
+    if not title:
+        return ("•", "")
+    first, _, rest = title.partition(" ")
+    # Heuristic: if the first token has any non-ASCII char treat it as the icon.
+    if any(ord(c) > 127 for c in first):
+        return (first, rest.strip())
+    return ("•", title)

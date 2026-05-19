@@ -5,6 +5,92 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+---
+
+## ADR-0026 — Per-turn HUD as an in-process PyQt6 widget (replaces libnotify replace-id)
+
+Date: 2026-05-19
+
+### Context
+
+ADR-0025 introduced a persistent per-turn notification driven by
+``notify-send -p -r <id>`` + ``gdbus CloseNotification``. In production
+on Plasma 6 / KDE the daemon **silently ignores ``-r <id>`` once the
+bubble has auto-expired** (or once the daemon's internal id table has
+rotated). The user keeps the previous title forever, ``CloseNotification``
+no-ops, and the next ``turn_start`` opens a *new* bubble alongside the
+stale one — exactly the bug the ADR was meant to prevent. We also
+have zero control over position, font size, dismiss timing and TTL,
+because libnotify is fire-and-forget over D-Bus.
+
+We need:
+
+* In-place updates we can trust (every ``turn_update`` always lands
+  in the same widget; nothing rotates underneath us).
+* Explicit lifecycle: open at recording, update per phase / per tool,
+  close on every exit including error paths.
+* Consistent look across KDE / GNOME / Hyprland / Sway.
+* No new system dependencies beyond what the tray already pulls in.
+
+### Decision
+
+Replace the libnotify persistent bubble with a **TurnHUD QWidget**
+hosted in the tray process:
+
+* ``src/voice_opencode/hud.py`` exposes ``TurnHUD`` (frameless,
+  ``WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus |
+  BypassWindowManagerHint``, translucent rounded panel with icon
+  column + title + subtitle, fade in/out 180ms, positioned in the
+  bottom-right of the screen under the cursor) and ``HudServer``
+  (Unix-socket listener bound to
+  ``$XDG_RUNTIME_DIR/voice-opencode/hud.sock``, mode 0600).
+
+* The pipeline + the MCP server are *clients* of the socket. They
+  call ``notify.turn_start`` / ``turn_update`` / ``turn_end`` which
+  serialise one JSON object per line (``{"op":"show|update|hide",
+  "icon":"🎙","title":"Grabando…","subtitle":"…"}``) and connect with
+  a 50ms timeout. If the socket isn't there (tray off), the call
+  silently no-ops — the pipeline never blocks on the HUD.
+
+* The libnotify backend keeps ``show(title, body, urgency)`` for
+  one-shot toasts (errors, "Ocupado", "Sin audio"). ``show_persistent``
+  and ``dismiss`` are removed; the capability ``NOTIFY_REPLACE`` is
+  retired.
+
+### Alternatives
+
+* **Keep libnotify, switch to ``mako`` / ``dunst``.** Fixes the bug
+  for the maintainer but not for users on KDE / GNOME defaults; we
+  can't ship a notification daemon as a dep.
+* **Talk to the D-Bus Notifications interface directly.** Same
+  daemon, same bug, just without the ``notify-send`` wrapper.
+* **GTK4 + gtk4-layer-shell.** Better placement on KDE/Sway/Hyprland
+  via layer-shell, but mixes a second GUI toolkit in the same
+  process, doesn't help on GNOME-Wayland (no layer-shell), and adds
+  ``gtk4`` + ``gobject-introspection`` system deps.
+* **Backend-per-DE (Qt on KDE, GTK on GNOME, AppKit on macOS).**
+  Four times the code and bug surface for marginal cosmetic gain.
+  PyQt6 already abstracts the platform well enough.
+* **Spawn a fresh QApplication per turn.** 200–400ms cold start
+  visible on every F9; no.
+
+### Consequences
+
+* Linux-first; macOS/Windows get the toasts via libnotify equivalents
+  in Phase B (HUD will be a separate backend then).
+* The HUD only lives while the tray runs. If the tray is killed mid-
+  turn the bubble disappears but the pipeline keeps working (best-
+  effort contract); ``turn_end`` calls become silent no-ops.
+* The pipeline + MCP server now have a *cross-process* dependency
+  on the tray for visual feedback, but it's failure-soft: a missing
+  socket only loses the HUD, not the turn itself. Tests cover the
+  "socket missing" branch.
+* ADR-0025 is **superseded for the visual feedback part** (focus
+  guard, MCP audit wrapper and the ``turn_start`` / ``turn_update``
+  / ``turn_end`` API stay; only the libnotify backing changes).
+
+---
+
 ## ADR-0025 — Input-injection safety: focus guard + live per-turn notification
 
 Date: 2026-05-19

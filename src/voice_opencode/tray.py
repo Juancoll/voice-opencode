@@ -33,6 +33,7 @@ from PyQt6.QtGui import QAction, QActionGroup, QIcon
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import paths
+from .hud import HudServer, TurnHUD
 
 # Path to the bash wrapper (so we shell out the same way the user does).
 VOICE_BIN = paths.PROJECT_ROOT / "voice"
@@ -435,6 +436,19 @@ def main() -> int:
         return 1
 
     _ = VoiceTray(app)  # keep ref alive
+
+    # Per-turn HUD (ADR-0026). Lives in this process; the pipeline +
+    # MCP server talk to it through the Unix socket in hud.HUD_SOCKET.
+    hud_widget = TurnHUD()
+    hud_server = HudServer(hud_widget)
+    try:
+        hud_server.start()
+    except OSError as e:
+        print(f"[tray] HUD socket failed: {e}", file=sys.stderr)
+    app.aboutToQuit.connect(hud_server.stop)
+    app._hud_widget = hud_widget  # type: ignore[attr-defined]  # keep refs alive
+    app._hud_server = hud_server  # type: ignore[attr-defined]
+
     return app.exec()
 
 

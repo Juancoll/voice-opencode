@@ -89,11 +89,6 @@ class NullClipboardBackend(_NullBase):
 class NullNotifyBackend(_NullBase):
     def show(self, title: str, body: str = "", urgency: str = "normal") -> None:
                                                    raise _no("notify.show")
-    def show_persistent(self, title: str, body: str = "", urgency: str = "normal",
-                        replace_id: int = 0) -> int:
-                                                   raise _no("notify.replace")
-    def dismiss(self, notification_id: int) -> None:
-                                                   raise _no("notify.replace")
 
 
 class NullDialogBackend(_NullBase):

@@ -3,6 +3,46 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — Replace libnotify per-turn bubble with PyQt6 HUD (ADR-0026)
+
+Live incident: on Plasma 6 the per-turn notification gets stuck on a
+stale title because the KDE notification daemon ignores ``-r <id>``
+once the bubble auto-expires. User saw "❌ opencode" surviving across
+a fresh successful turn, and a second new bubble opening alongside.
+``notify-send`` gives us no way to fix this without ditching the
+daemon.
+
+Rewrite: the persistent bubble is now a frameless ``QWidget``
+(``src/voice_opencode/hud.py::TurnHUD``) hosted **inside the tray
+process**. The pipeline + the MCP server are clients of a Unix
+socket (``$XDG_RUNTIME_DIR/voice-opencode/hud.sock``) bound by a
+``HudServer`` that drives the widget via ``QSocketNotifier`` on the
+tray's own Qt event loop — no threads, no second QApplication, no
+D-Bus.
+
+- ``hud.py`` new: ``TurnHUD`` (icon column + title + subtitle, fade
+  180ms, bottom-right of the screen under the cursor, no focus, no
+  taskbar entry) and ``HudServer`` (one JSON object per line over
+  ``AF_UNIX``).
+- ``notify.py`` rewritten: ``turn_start`` / ``turn_update`` /
+  ``turn_end`` now talk to the HUD socket; one-shot ``notify()``
+  toasts still go through libnotify for errors and incidental events.
+- ``backends/linux_dialog_kde/knotify_backend.py``: dropped
+  ``show_persistent`` and ``dismiss``; only ``show`` remains.
+- ``platform/{base,null,capabilities}.py``: removed
+  ``NOTIFY_REPLACE`` capability and its Protocol/Null methods.
+- ``tray.py``: bootstraps ``TurnHUD`` + ``HudServer`` at startup and
+  stops them on ``aboutToQuit``.
+- Tests: ``tests/test_notify_turn.py`` rewritten against the new
+  socket protocol; new ``tests/test_hud.py`` exercises the widget +
+  server with ``QT_QPA_PLATFORM=offscreen`` and a real Unix socket
+  in a tmp dir (show / update / hide / unknown-op / elision / send
+  client / missing-socket no-op).
+- ADR-0026 documents the trade-off; ADR-0025 is partially superseded
+  (visual feedback only — focus guard and audit wrapper stay).
+
+440 tests / ruff / mypy green.
+
 ## 2026-05-19 — Abort runaway agent + surface errors in the turn bubble
 
 Live incident: 60s HTTP timeout fired mid-turn while the model was in a
