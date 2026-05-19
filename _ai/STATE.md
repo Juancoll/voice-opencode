@@ -102,6 +102,10 @@ session. Refresh this whenever something material changes.
 - `session.id`  — opencode session uuid
 - `server.url`  — (reserved for future use)
 - `screen.png`  — last screenshot sent to opencode
+- `turn.notify-id` — id of the active per-turn notification (ADR-0025);
+  pipeline writes it on `turn_start`, MCP server reads it to update
+  the same on-screen bubble via `notify-send -r <id>`, pipeline
+  clears it on `turn_end`.
 
 Plus, in the repo:
 

@@ -3,6 +3,52 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — ADR-0025: focus guard + live per-turn notification
+
+- New capability ``NOTIFY_REPLACE``. ``LibnotifyBackend`` advertises
+  it and implements ``show_persistent`` (via
+  ``notify-send -p -t 86400000 -r <id>``, parses stdout for the id)
+  and ``dismiss`` (via ``gdbus call
+  org.freedesktop.Notifications.CloseNotification``). ``NullNotifyBackend``
+  raises ``NotSupportedError`` for both.
+- ``notify.py``: new ``turn_start`` / ``turn_update`` / ``turn_end``
+  helpers backed by a single shared id stored at
+  ``$XDG_RUNTIME_DIR/voice-opencode/turn.notify-id``. Pipeline and
+  MCP server (separate processes) read/write the file to update the
+  same on-screen bubble. Falls back to plain ``notify(...)`` when
+  ``NOTIFY_REPLACE`` is absent.
+- ``pipeline.py`` now opens the bubble at recording start, updates it
+  at each phase (Transcribiendo / Pensando / Respondiendo), and
+  closes it on every exit path (success, error, empty transcript).
+- ``mcp_server.py``: new ``_audit(tool, args, result="ok")`` wrapper
+  replaces 62 direct ``agent.audit(...)`` call sites at acting tools.
+  On ``result == "ok"`` it calls ``turn_update("⚙️ Agente actuando",
+  _fmt_action(tool, args))``. ``_fmt_action`` renders one line
+  ``tool(k=v, ...)`` truncating string values to 30 chars and the
+  whole label to ≤80 chars (always ends in ``…`` when truncated).
+- ``mcp_server.py``: focus guard. New ``_focus_state`` dict,
+  ``_record_focus(target, id)``, ``_focus_guard(tool) -> str | None``.
+  TTL ``_FOCUS_GUARD_TTL_S = 5.0``. Refuses unless a recent
+  ``focus_window`` was recorded AND the WM's current active window id
+  matches it (best-effort: skips the id check when the backend
+  doesn't advertise ``WM_ACTIVE_WINDOW``). Wired into ``type_text``,
+  ``press_key``, ``click_mouse``. ``focus_window`` now resolves the
+  target via ``plat.wm.active_window()`` after focusing and stores
+  the id.
+- Tests: 11 new in ``tests/test_mcp_server.py`` (focus guard:
+  no-recent-focus, TTL expiry, missing WM cap, id drift, id match;
+  ``_fmt_action``: short, long-value truncation, overall truncation;
+  ``_audit``: calls ``turn_update`` on ok, skips on error). 7 new in
+  ``tests/test_notify_turn.py`` (start writes id, update keeps id,
+  no-op without active turn, end dismisses + clears, end is
+  idempotent, fallback when ``NOTIFY_REPLACE`` absent, no-op when
+  ``settings.notify`` is False). Total 429 pass, ruff + mypy green.
+- Smoke-tested on user's KDE/Plasma notification daemon under
+  Hyprland: 5 sequential ``turn_update`` calls produce one bubble
+  that updates in place (confirmed by user).
+- ADR-0025 added covering rationale, alternatives, rules for any
+  new acting tool.
+
 ## 2026-05-19 — Phase B + ADR-0024: multi-distro installer, XFCE binds, Windows plan
 
 - Phase B (single commit, since B.1-B.6 are inherently entangled in

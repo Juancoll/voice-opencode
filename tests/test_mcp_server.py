@@ -196,3 +196,119 @@ def test_ocr_tools_in_read_only(monkeypatch):
     if plat.supported("ocr.find_text"):
         assert "screen_find_text" in ro
         assert "ocr_find_text_in_file" in ro
+
+
+# ---------------------------------------------------------------------------
+# Focus guard (ADR-0025): block type/click/press unless a recent
+# focus_window matches the current active window.
+# ---------------------------------------------------------------------------
+def test_focus_guard_blocks_without_recent_focus(monkeypatch):
+    """No focus_window in the last N seconds => guard refuses."""
+    mcp_server._focus_state["target"] = ""
+    mcp_server._focus_state["expected_id"] = ""
+    mcp_server._focus_state["ts"] = 0.0
+    err = mcp_server._focus_guard("type_text")
+    assert err is not None and "focus_window" in err
+
+
+def test_focus_guard_expires_after_ttl(monkeypatch):
+    import time as _t
+    mcp_server._record_focus("chrome", "0x1234")
+    monkeypatch.setattr(mcp_server, "_FOCUS_GUARD_TTL_S", 0.01)
+    _t.sleep(0.02)
+    err = mcp_server._focus_guard("click_mouse")
+    assert err is not None and "focus_window" in err
+
+
+def test_focus_guard_passes_when_recent_and_no_active_window_cap(monkeypatch):
+    """If the WM can't tell us active window, trust the recent focus."""
+    from voice_opencode import platform as plat
+    mcp_server._record_focus("chrome", "0x1234")
+    monkeypatch.setattr(plat, "supported", lambda c: False)
+    assert mcp_server._focus_guard("type_text") is None
+
+
+def test_focus_guard_blocks_when_active_window_drifted(monkeypatch):
+    """User switched window after agent focused => refuse to type."""
+    from voice_opencode import platform as plat
+    from voice_opencode.platform.types import Rect, Window
+
+    mcp_server._record_focus("chrome", "0xCHROME")
+
+    class FakeWM:
+        def active_window(self):
+            return Window(id="0xTERMINAL", pid=1, app_id="kitty",
+                          title="t", rect=Rect(0, 0, 100, 100),
+                          monitor_id=0, workspace_id=1,
+                          focused=True, floating=False,
+                          fullscreen=False)
+
+    monkeypatch.setattr(plat, "supported", lambda c: True)
+    monkeypatch.setattr(plat, "wm", FakeWM())
+    err = mcp_server._focus_guard("type_text")
+    assert err is not None and "drifted" not in err  # message says "changed"
+    assert "0xCHROME" in err and "0xTERMINAL" in err
+
+
+def test_focus_guard_passes_when_active_matches(monkeypatch):
+    from voice_opencode import platform as plat
+    from voice_opencode.platform.types import Rect, Window
+
+    mcp_server._record_focus("chrome", "0xCHROME")
+
+    class FakeWM:
+        def active_window(self):
+            return Window(id="0xCHROME", pid=1, app_id="chrome",
+                          title="t", rect=Rect(0, 0, 100, 100),
+                          monitor_id=0, workspace_id=1,
+                          focused=True, floating=False,
+                          fullscreen=False)
+
+    monkeypatch.setattr(plat, "supported", lambda c: True)
+    monkeypatch.setattr(plat, "wm", FakeWM())
+    assert mcp_server._focus_guard("type_text") is None
+
+
+# ---------------------------------------------------------------------------
+# _fmt_action: one-line label for the per-turn notification
+# ---------------------------------------------------------------------------
+def test_fmt_action_short():
+    assert mcp_server._fmt_action("click_mouse",
+                                  {"button": "left", "x": 100, "y": 200}) \
+        == "click_mouse(button='left', x=100, y=200)"
+
+
+def test_fmt_action_truncates_long_string_values():
+    s = "a" * 100
+    out = mcp_server._fmt_action("type_text", {"text": s})
+    # repr adds quotes; value alone gets truncated to 27 + ellipsis
+    assert "…" in out
+    assert len(out) < 100
+
+
+def test_fmt_action_truncates_overall_body():
+    out = mcp_server._fmt_action("x", {f"k{i}": f"v{i}" for i in range(20)})
+    assert len(out) <= 80
+    assert out.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# _audit wrapper: pipes ok-results into turn_update
+# ---------------------------------------------------------------------------
+def test_audit_calls_turn_update_on_ok(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mcp_server, "turn_update",
+                        lambda title, body: calls.append((title, body)))
+    monkeypatch.setattr(mcp_server.agent, "audit", lambda *a, **k: None)
+    mcp_server._audit("type_text", {"text": "hola"})
+    assert len(calls) == 1
+    assert "type_text" in calls[0][1]
+
+
+def test_audit_skips_turn_update_on_error_result(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mcp_server, "turn_update",
+                        lambda title, body: calls.append((title, body)))
+    monkeypatch.setattr(mcp_server.agent, "audit", lambda *a, **k: None)
+    mcp_server._audit("type_text", {"text": "x"}, result="refused: ...")
+    assert calls == []

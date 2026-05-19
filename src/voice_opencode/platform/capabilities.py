@@ -63,6 +63,7 @@ CLIPBOARD_WRITE_PRIMARY = "clipboard.write_primary"
 # Notifications & dialogs
 # ---------------------------------------------------------------------------
 NOTIFY_SHOW             = "notify.show"
+NOTIFY_REPLACE          = "notify.replace"
 DIALOG_CONFIRM          = "dialog.confirm"
 DIALOG_ASK_TEXT         = "dialog.ask_text"
 DIALOG_ASK_CHOICE       = "dialog.ask_choice"

@@ -5,6 +5,138 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0025 — Input-injection safety: focus guard + live per-turn notification
+
+Date: 2026-05-19
+
+### Context
+
+The MCP server exposes input-injection tools (`type_text`, `press_key`,
+`click_mouse`) backed by `ydotool` on Hyprland. `ydotool` writes to a
+shared `/dev/uinput` virtual device — it does NOT have any concept of
+target window. Whatever has keyboard focus at the moment the keystroke
+is dispatched receives it.
+
+Two failure modes observed in the wild:
+
+1. The agent decides to "type the answer in the chat" while the user
+   has already switched to a terminal. The text is injected into the
+   terminal and, on a bad day, executes.
+2. The user has no idea what the agent is doing in the middle of a
+   long turn. Toast notifications stack up (one per tool call), are
+   read in the wrong order, or auto-dismiss before being read.
+
+We need (a) a hard guard that refuses to inject input unless the
+window the agent thinks it's typing into is still the one with focus,
+and (b) a single, persistent on-screen indicator that always reflects
+*what* the agent is doing right now.
+
+### Decision
+
+**Focus guard (combined check).** Every input-injection MCP tool runs
+through `_focus_guard(tool_name)` before doing any work. The guard
+refuses unless **both** conditions hold:
+
+1. A successful `focus_window(...)` MCP call happened within
+   `_FOCUS_GUARD_TTL_S = 5.0` seconds. The guard remembers the
+   `target` string and the resolved backend window id in
+   `_focus_state` (module-level dict).
+2. The platform's current `wm.active_window().id` equals the id
+   remembered from that `focus_window` call.
+
+If the WM backend doesn't expose `WM_ACTIVE_WINDOW` (e.g.
+`linux-generic` fallback), condition (2) is skipped and the guard
+trusts the timestamp alone (best-effort, logged as degraded).
+
+On refusal the tool returns a string starting with `refused:` that
+names the missing focus target and the actual one, so the model can
+recover by calling `focus_window` and retrying. No exception is raised
+— refusals are normal control flow.
+
+**Live per-turn notification.** The pipeline owns one persistent
+notification per turn:
+
+- `turn_start(title, body)` is called when recording begins. It opens
+  a notification via `notify-send -p -t 86400000` (urgency=critical,
+  parses the returned id) and writes the id to
+  `$XDG_RUNTIME_DIR/voice-opencode/turn.notify-id`.
+- `turn_update(title, body)` re-uses the same id via `notify-send -r
+  <id>` so the bubble updates in place instead of stacking. Called by
+  the pipeline at each phase (Transcribiendo / Pensando / Respondiendo)
+  AND by the MCP server's `_audit(...)` wrapper on every successful
+  acting tool, with a one-line `tool(args)` label truncated to ≤80
+  chars by `_fmt_action`.
+- `turn_end()` dismisses the notification via
+  `org.freedesktop.Notifications.CloseNotification` over `gdbus` and
+  removes the id file. Called from every pipeline exit path
+  (success / error / empty transcript).
+
+The file-based id is the IPC handle: the pipeline (one process) and
+the MCP server (a separate process started by `opencode serve`) both
+read/write `turn.notify-id` to update the same bubble. No socket, no
+DBus signal — a 4-byte text file is enough because there is at most
+one turn in flight.
+
+**Audit hook.** A new `_audit(tool, args, result="ok")` wrapper in
+`mcp_server.py` replaces direct `agent.audit(...)` calls at every
+acting-tool site (62 call sites). It (i) writes the JSONL audit entry
+as before and (ii) calls `turn_update("⚙️ Agente actuando",
+_fmt_action(tool, args))` on `result == "ok"`. Non-ok results
+(refusals, rate-limit hits) are audited but not surfaced as
+notification updates — the existing notification text stays so the
+user sees the *current* action, not the last refused one.
+
+**Capability flag.** New `NOTIFY_REPLACE = "notify.replace"` advertises
+the persistent-bubble feature. `LibnotifyBackend` advertises it
+(parses `notify-send -p` stdout); `NullNotifyBackend` does not. The
+`turn_*` helpers degrade gracefully: if `NOTIFY_REPLACE` is absent,
+`turn_start` falls back to a plain `notify(...)` with no replace
+contract (bubbles will stack on such systems).
+
+### Alternatives considered
+
+- **Exclusive uinput grab.** Would let the agent type "into nothing"
+  even when the user is at the keyboard. Requires CAP_SYS_ADMIN-level
+  privileges on `/dev/uinput` and breaks regular typing system-wide.
+  Rejected.
+- **Tray widget instead of notifications.** A persistent line in the
+  PyQt6 tray menu would survive any notification daemon. Rejected for
+  now because the tray menu is not visible unless the user clicks the
+  icon; a toast in the corner of the screen is the right UX for "the
+  agent is doing X right now". Reconsider if multiple notification
+  daemons turn out to handle `--replace-id` differently.
+- **Per-tool toasts (no persistent bubble).** Rejected: tested live,
+  stacks of 5+ toasts during a single MCP turn, ordering is daemon-
+  dependent, important steps scroll off.
+- **D-Bus method calls instead of `notify-send`.** Equivalent semantics
+  with one extra dep (`pydbus` or raw `dbus-next`). Deferred — the
+  CLI invocation works, is debuggable from a terminal, and matches
+  the rest of the platform layer's shell-out style.
+- **Focus guard with only timestamp OR only id-match.** Each alone has
+  a hole (timestamp-only: user can grab focus within the TTL;
+  id-only: stale snapshot of the wrong window passes). The combined
+  check is what the user requested and it closes both.
+
+### Consequences
+
+- Any new acting tool added to the MCP surface MUST call `_audit(...)`
+  instead of `agent.audit(...)` to participate in the live indicator.
+  Enforced by review only (no static check yet).
+- Any new acting tool that injects input MUST go through
+  `_focus_guard("name")`. A unit test must cover refusal when no
+  focus is recorded.
+- Tools that don't inject input (screen capture, file reads, sleep,
+  apps_list_installed, …) are not guarded — they're safe regardless
+  of focus.
+- The pipeline now depends on `STATE_DIR` being writable. Already true
+  on every supported platform (`$XDG_RUNTIME_DIR/voice-opencode`).
+- Users on a notification daemon that ignores `--replace-id` will see
+  stacked bubbles. Mitigated by the capability flag fallback. Verified
+  working on the user's setup (KDE/Plasma StatusNotifierHost on
+  Hyprland).
+
+---
+
 ## ADR-0024 — Windows as second platform: scope and deferral plan (Phase C)
 
 Date: 2026-05-19

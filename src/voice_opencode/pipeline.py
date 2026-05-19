@@ -39,7 +39,7 @@ from collections.abc import Iterator
 
 from . import agent, audio, stt, tts
 from .logging import log
-from .notify import notify
+from .notify import notify, turn_end, turn_start, turn_update
 from .opencode_client import Session
 from .paths import PIPELINE_LOCK_FILE, ensure_dirs
 from .screenshot import capture
@@ -183,7 +183,7 @@ def start_recording() -> None:
             return
         audio.start()
         set_state("recording")
-        notify("🎙 Grabando…", "Suelta F9 para enviar")
+        turn_start("🎙 Grabando…", "Suelta F9 para enviar")
 
 
 def stop_and_run() -> None:
@@ -195,6 +195,12 @@ def stop_and_run() -> None:
     Holds the cross-process pipeline lock for the whole STT → opencode
     → TTS run so a second F9 release while we're speaking is dropped
     instead of racing a second TTS on top of the first.
+
+    Persistent turn notification (ADR-0025): opened in
+    ``start_recording`` and kept alive across each phase so the user
+    sees "🎙 Grabando" → "🧠 Pensando" → "⚙️ <tool>" (updated by the
+    MCP server as it runs tools) → "🔊 Respondiendo" → closed. On
+    error paths it's also closed after the final notify().
     """
     with _pipeline_lock("stop_and_run") as acquired:
         if not acquired:
@@ -203,9 +209,11 @@ def stop_and_run() -> None:
         wav = audio.stop()
         if wav is None:
             set_state("idle")
+            turn_end()
             return
 
         set_state("thinking")
+        turn_update("🧠 Transcribiendo…", "")
 
         # 1. Transcribe
         try:
@@ -214,13 +222,15 @@ def stop_and_run() -> None:
             log(f"STT error: {e}")
             notify("❌ Error STT", str(e), urgency="critical")
             set_state("error")
+            turn_end()
             return
         if not text:
             notify("🤷 Nada que transcribir", "")
             set_state("idle")
+            turn_end()
             return
 
-        notify("🧠 Pensando…", text[:80])
+        turn_update("🧠 Pensando…", text[:80])
 
         # 2. Ask opencode (with optional screenshot)
         shot = capture()
@@ -230,13 +240,15 @@ def stop_and_run() -> None:
             log(f"opencode error: {e}")
             notify("❌ opencode", str(e), urgency="critical")
             set_state("error")
+            turn_end()
             return
         if not reply:
             notify("🤐 Sin respuesta", "")
             set_state("idle")
+            turn_end()
             return
 
-        notify("🔊 Respondiendo", reply[:80])
+        turn_update("🔊 Respondiendo", reply[:80])
 
         # 3. Speak
         set_state("speaking")
@@ -246,9 +258,11 @@ def stop_and_run() -> None:
             log(f"TTS error: {e}")
             notify("❌ Error TTS", str(e), urgency="critical")
             set_state("error")
+            turn_end()
             return
 
         set_state("idle")
+        turn_end()
 
 
 def toggle() -> None:
