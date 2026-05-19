@@ -3,6 +3,58 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-19 — F9 mid-turn cancels (ADR-0027); kill every libnotify toast from the pipeline
+
+The HUD shipped in ADR-0026 fixed the per-turn display, but live
+testing surfaced two complaints the very next session:
+
+1. F9 while a turn was running (`thinking` / `speaking`) stacked
+   "⏳ Ocupado" libnotify toasts on top of the HUD, one per press
+   — three quick F9s = three notifications. The user wanted them
+   gone *and* wanted F9 to actually stop the turn.
+2. Several error paths in `pipeline.stop_and_run` were still firing
+   `notify(...)` toasts (`❌ Error STT`, `❌ opencode`, `❌ Error TTS`,
+   `🤷 Nada que transcribir`, `🤐 Sin respuesta`) in addition to the
+   HUD's own error frame → duplicated feedback.
+3. Other call-sites (`start_recording` pause toast, `cmd_session
+   reset`, `cmd_ask` opencode error, `cmd_pause`, `cmd_resume`) were
+   also still calling `notify(...)`. User said: "solo quiero las
+   nuevas ventanas de Python, no las de notificación."
+
+Changes:
+
+* New `pipeline._cancel_active_turn(holder_pid)`:
+  `Session.abort()` → SIGINT holder (so its `finally` releases the
+  lockfile cleanly; SIGTERM would skip `finally`) → `pkill -x paplay`
+  (Popen child doesn't share signals with python parent) → HUD
+  `turn_update("🛑 Cancelado") + turn_end()` from the canceller.
+* `pipeline.stop_and_run` opens with a cancel-on-busy branch: if the
+  lockfile holder is live + fresh AND `state.get_state()` is in
+  `{thinking, speaking}`, cancel and return. Otherwise fall through
+  to the silent-drop path in `_pipeline_lock`.
+* `_pipeline_lock`: `notify_on_busy` parameter removed; the
+  contention path is unconditionally silent now.
+* Every `notify(...)` call deleted from `pipeline.py` (5 error
+  paths + the pause/agent-blocking toast in `start_recording`) and
+  from `cli.py` (4 call-sites). `notify` import gone from both.
+* `notify(...)` and `plat.notify.show(...)` remain available — used
+  by `voice dialog notify` (CLI explicitly requesting a toast) and
+  by the MCP `notify` tool (the agent intentionally calling it).
+  Both backends untouched.
+* Pipeline test fixture stops monkey-patching `pipeline.notify`
+  (the name no longer exists in the module). Two obsolete tests
+  about `notify_on_busy` removed; one test renamed and trimmed.
+  Six new tests cover `_cancel_active_turn` happy path, dead-PID
+  no-op, and the cancel-vs-drop dispatch in `stop_and_run`
+  (parameterised over `thinking` / `speaking`).
+* ADR-0027 added at the top of `_ai/DECISIONS.md` documenting
+  context, decision (including the SIGINT-vs-SIGTERM rationale),
+  alternatives considered, and consequences.
+
+444 tests / ruff / mypy green. The pipeline now emits ZERO libnotify
+toasts during a normal turn — every user-visible per-turn signal
+goes through the PyQt HUD, exactly as ADR-0026 promised.
+
 ## 2026-05-19 — HUD floats + pins on Hyprland via runtime hyprctl dispatch
 
 The HUD widget (previous commit) showed up tile-sized in whatever

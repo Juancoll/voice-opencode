@@ -34,12 +34,15 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import signal
+import subprocess
 import time
 from collections.abc import Iterator
 
 from . import agent, audio, stt, tts
+from . import state as state_mod
 from .logging import log
-from .notify import notify, turn_end, turn_start, turn_update
+from .notify import turn_end, turn_start, turn_update
 from .opencode_client import Session
 from .paths import PIPELINE_LOCK_FILE, ensure_dirs
 from .screenshot import capture
@@ -48,6 +51,75 @@ from .state import set_state
 # A long TTS reply caps at ~60s thanks to the paplay watchdog in
 # tts.speak(); 120s gives us 2x headroom plus STT + opencode latency.
 _LOCK_TTL_S: float = 120.0
+
+# Phases during which a second F9 release is interpreted as "cancel
+# the running turn" instead of "ignored, you're busy". 'recording'
+# is excluded because audio.stop() / stop_and_run() is the normal
+# successor of a recording turn, not a cancel of one.
+_CANCELLABLE_STATES: frozenset[str] = frozenset({"thinking", "speaking"})
+
+
+def _cancel_active_turn(holder_pid: int) -> None:
+    """Best-effort cancellation of an in-flight pipeline turn.
+
+    Called from a *different* process than the one holding the lock,
+    so we cannot just raise — we must signal across processes.
+
+    Order:
+
+    1. ``Session.abort()`` so the opencode server stops the runaway
+       tool loop. Without this, killing the local process leaves the
+       model still spinning server-side and the next ``ask()`` blocks
+       on its `/event` stream until the previous run times out.
+    2. ``SIGINT`` (not SIGTERM) to the holder PID. SIGINT raises
+       ``KeyboardInterrupt`` in pure-Python ``time.sleep`` /
+       ``subprocess.wait``, which lets the holder's
+       ``_pipeline_lock`` ``finally`` clause run and unlink the
+       lockfile — clean exit, no stale lock. SIGTERM bypasses
+       ``finally`` and would leave the lock for the TTL stealer.
+    3. Best-effort ``pkill paplay`` in case the holder is mid-TTS;
+       SIGINT'ing the python parent doesn't propagate to ``paplay``
+       (separate process group via ``subprocess.Popen`` defaults).
+    4. HUD update + ``turn_end()`` from *this* process. The HUD lives
+       in the tray and is reachable via the unix socket from any
+       process, so we can render "🛑 Cancelado" without waiting for
+       the dying holder to update it.
+    """
+    try:
+        sid = Session.current_id()
+        if sid:
+            Session(sid).abort()
+            log(f"Cancel: aborted opencode session {sid}.")
+    except Exception as e:  # pragma: no cover — defensive
+        log(f"Cancel: session.abort() failed: {e}")
+
+    try:
+        os.kill(holder_pid, signal.SIGINT)
+        log(f"Cancel: sent SIGINT to pipeline holder pid={holder_pid}.")
+    except ProcessLookupError:
+        log(f"Cancel: holder pid={holder_pid} already gone.")
+    except PermissionError as e:  # pragma: no cover — only if owned by root
+        log(f"Cancel: cannot signal pid={holder_pid}: {e}")
+
+    # paplay runs in its own subprocess that doesn't share a signal
+    # mask with our python parent. pkill -x is targeted enough that
+    # we won't murder unrelated audio players.
+    try:
+        subprocess.run(
+            ["pkill", "-x", "paplay"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):  # pragma: no cover
+        pass
+
+    # State + HUD updates from the canceller. The holder's own HUD
+    # code path won't run because SIGINT interrupts it mid-call.
+    set_state("idle")
+    turn_update("🛑 Cancelado", "")
+    turn_end()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -97,16 +169,13 @@ def _try_create_lockfile() -> bool:
 
 
 @contextlib.contextmanager
-def _pipeline_lock(action: str, *, notify_on_busy: bool = True) -> Iterator[bool]:
+def _pipeline_lock(action: str) -> Iterator[bool]:
     """Yield True if the cross-process pipeline lock was acquired.
 
-    On contention with a *live, fresh* holder we log and (unless
-    ``notify_on_busy`` is False) emit a low-urgency notify, then yield
-    False. ``start_recording`` passes ``notify_on_busy=False`` so a
-    held F9 (Hyprland key-repeat) or an accidental double-tap during
-    recording is dropped silently — popping a toast on every keypress
-    is worse than the bug it fixes. ``stop_and_run`` keeps the toast
-    so the user gets feedback if releasing F9 mid-reply does nothing.
+    On contention with a *live, fresh* holder we log and yield False
+    silently. The HUD already shows the running turn's state, so
+    libnotify toasts are NOT emitted here — that was the whole point
+    of ADR-0026 and ADR-0027.
 
     On contention with a stale holder (dead PID or older than
     ``_LOCK_TTL_S``) we steal the lock and proceed. The log line on
@@ -125,12 +194,6 @@ def _pipeline_lock(action: str, *, notify_on_busy: bool = True) -> Iterator[bool
         if not stale:
             pid, age = owner  # type: ignore[misc]
             log(f"Pipeline busy — ignoring {action} (held by pid={pid}, age={age:.1f}s).")
-            if notify_on_busy:
-                notify(
-                    "⏳ Ocupado",
-                    "Esperá a que termine el turno actual",
-                    urgency="low",
-                )
             yield False
             return
         # Stale: steal and retry once.
@@ -172,12 +235,11 @@ def start_recording() -> None:
     if agent.is_blocking():
         why = "agent activo" if agent.is_active() else "en pausa"
         log(f"Blocked — ignoring start ({why}).")
-        notify(f"⏸  {why.capitalize()}", "F9 ignorado", urgency="low")
         return
     if audio.is_recording():
         log("F9 descartado: ya hay un turno en curso (grabación o respuesta).")
         return
-    with _pipeline_lock("start_recording", notify_on_busy=False) as acquired:
+    with _pipeline_lock("start_recording") as acquired:
         if not acquired:
             log("F9 descartado: ya hay un turno en curso (grabación o respuesta).")
             return
@@ -193,15 +255,42 @@ def stop_and_run() -> None:
     error path so the state always lands on ``idle`` or ``error``.
 
     Holds the cross-process pipeline lock for the whole STT → opencode
-    → TTS run so a second F9 release while we're speaking is dropped
-    instead of racing a second TTS on top of the first.
+    → TTS run so a second F9 release while we're speaking is either
+    dropped or interpreted as a cancel (see below).
 
-    Persistent turn notification (ADR-0025): opened in
-    ``start_recording`` and kept alive across each phase so the user
-    sees "🎙 Grabando" → "🧠 Pensando" → "⚙️ <tool>" (updated by the
-    MCP server as it runs tools) → "🔊 Respondiendo" → closed. On
-    error paths it's also closed after the final notify().
+    **F9-while-busy = cancel** (ADR-0027): if the lock is held by a
+    live, fresh holder AND the pipeline is currently in a cancellable
+    phase (``thinking`` or ``speaking``), this F9 release means
+    "stop, I don't want this turn anymore". We abort the opencode
+    session, SIGINT the holder, kill any in-flight ``paplay``, and
+    close the HUD. The holder process exits cleanly via its
+    ``_pipeline_lock`` ``finally`` clause.
+
+    Per-turn HUD (ADR-0026): opened in ``start_recording`` and kept
+    alive across each phase so the user sees "🎙 Grabando" →
+    "🧠 Pensando" → "⚙️ <tool>" (updated by the MCP server as it
+    runs tools) → "🔊 Respondiendo" → closed. Error paths update the
+    HUD before closing it; libnotify toasts are NOT used here because
+    they would stack on top of the HUD (the bug ADR-0026 was meant
+    to fix in the first place).
     """
+    # Cancel-on-busy branch — runs before we try to acquire the lock.
+    if PIPELINE_LOCK_FILE.exists():
+        owner = _read_lock_owner(PIPELINE_LOCK_FILE)
+        if (
+            owner is not None
+            and owner[1] <= _LOCK_TTL_S
+            and _pid_alive(owner[0])
+            and state_mod.get_state() in _CANCELLABLE_STATES
+        ):
+            holder_pid, age = owner
+            log(
+                f"F9 mid-turn: cancelling holder pid={holder_pid} "
+                f"age={age:.1f}s state={state_mod.get_state()}."
+            )
+            _cancel_active_turn(holder_pid)
+            return
+
     with _pipeline_lock("stop_and_run") as acquired:
         if not acquired:
             return
@@ -221,13 +310,11 @@ def stop_and_run() -> None:
             text = stt.transcribe(wav)
         except Exception as e:
             log(f"STT error: {e}")
-            notify("❌ Error STT", str(e), urgency="critical")
             set_state("error")
             turn_update("❌ Error STT", str(e)[:120])
             turn_end()
             return
         if not text:
-            notify("🤷 Nada que transcribir", "")
             set_state("idle")
             turn_update("🤷 Nada que transcribir", "")
             turn_end()
@@ -246,13 +333,11 @@ def stop_and_run() -> None:
             # ask() already called abort() on Timeout — extra POST is
             # cheap and idempotent.
             session.abort()
-            notify("❌ opencode", str(e), urgency="critical")
             set_state("error")
             turn_update("❌ opencode", str(e)[:120])
             turn_end()
             return
         if not reply:
-            notify("🤐 Sin respuesta", "")
             set_state("idle")
             turn_update("🤐 Sin respuesta", "")
             turn_end()
@@ -266,7 +351,6 @@ def stop_and_run() -> None:
             tts.speak(reply)
         except Exception as e:
             log(f"TTS error: {e}")
-            notify("❌ Error TTS", str(e), urgency="critical")
             set_state("error")
             turn_update("❌ Error TTS", str(e)[:120])
             turn_end()

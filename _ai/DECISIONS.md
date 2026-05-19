@@ -7,6 +7,105 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0027 — F9-while-busy cancels the active turn (no more "Ocupado" toast)
+
+Date: 2026-05-19
+
+### Context
+
+After ADR-0026 landed the per-turn HUD, the user reported two related
+annoyances on the very next live test:
+
+1. Pressing F9 while a turn is already running (`thinking` or
+   `speaking`) did nothing useful — it only stacked low-urgency
+   "⏳ Ocupado / Esperá a que termine el turno actual" libnotify
+   toasts on top of the HUD, one per F9 press. Three quick presses
+   produced three notifications.
+2. The intuitive expectation when the user hits F9 mid-reply is
+   "stop, I changed my mind", not "remind me politely that I have
+   to wait". A runaway tool loop (the same kind ADR-bd363b2 patched
+   for HTTP timeouts) couldn't be killed from the keyboard.
+
+The pipeline is multi-process (Hyprland dispatches each F9 bind as a
+fresh ``voice`` process), so any "cancel" mechanism has to signal
+across processes.
+
+### Decision
+
+Reinterpret F9-while-busy as **cancel the running turn** when the
+pipeline state is in `{thinking, speaking}`. Specifically, the
+opening branch of ``pipeline.stop_and_run`` now:
+
+1. Reads the lockfile to find the holder PID + age.
+2. If the holder is live + fresh AND ``state.get_state()`` is in
+   ``_CANCELLABLE_STATES``, calls ``_cancel_active_turn(holder_pid)``
+   and returns.
+3. Otherwise proceeds into ``_pipeline_lock`` as before (which
+   silently drops on contention).
+
+``_cancel_active_turn`` does, in order:
+
+1. ``Session(sid).abort()`` so the opencode server stops the runaway
+   tool loop (otherwise killing the local process leaves the model
+   spinning server-side and the next ``ask()`` blocks).
+2. ``os.kill(holder_pid, signal.SIGINT)`` — **SIGINT, not SIGTERM**,
+   because SIGINT raises ``KeyboardInterrupt`` in pure-Python blocking
+   calls (``time.sleep``, ``subprocess.wait``, ``requests``) which
+   lets the holder's ``_pipeline_lock`` ``finally`` clause run and
+   unlink the lockfile cleanly. SIGTERM would bypass ``finally`` and
+   leave the lock for the TTL stealer.
+3. Best-effort ``pkill -x paplay`` in case the holder was mid-TTS;
+   ``Popen`` defaults don't share a signal mask between the python
+   parent and the audio subprocess.
+4. ``set_state("idle")`` + HUD ``turn_update("🛑 Cancelado")`` +
+   ``turn_end()`` from the **canceller** process. The HUD socket
+   lives in the tray and is reachable from any process, so we can
+   render cancellation before the dying holder has a chance to.
+
+Also part of this ADR: the libnotify ``notify(...)`` toasts that
+``pipeline.stop_and_run`` emitted on every error path (`❌ Error STT`,
+`❌ opencode`, `❌ Error TTS`, `🤷 Nada que transcribir`, `🤐 Sin
+respuesta`) are removed. The HUD now owns 100% of the per-turn user
+feedback, which is the entire point of ADR-0026. Duplicate toasts on
+top of the HUD are exactly what we are trying to stop. ``notify(...)``
+remains in use for the "agent active / paused" pre-flight toasts in
+``start_recording`` (those are not part of a turn lifecycle).
+
+### Alternatives
+
+* **Cancel flag file polled by the holder.** Requires the holder to
+  insert a poll in every blocking call; ``requests.post`` doesn't
+  cooperate. Cross-process signal is simpler.
+* **SIGTERM the holder.** Skips ``finally``; leaves a stale lockfile
+  every time, forcing the next turn to wait for TTL or steal.
+* **Keep the "Ocupado" toast, just use replace-id.** Doesn't address
+  the user's real complaint, which is that the toast is the wrong
+  *action*, not the wrong *count*.
+* **Make F9-while-busy enqueue the next utterance.** Too clever for
+  push-to-talk; the user wanted a brake pedal, not a queue.
+
+### Consequences
+
+* F9 during a runaway tool loop now actually stops it (combined
+  with `bd363b2`'s HTTP timeout abort, the pipeline has two
+  independent cancellation paths: timeout and human).
+* The shared ``logs/voice.log`` will get a single "F9 mid-turn:
+  cancelling holder pid=… age=… state=…" line per cancellation,
+  which is easy to grep when diagnosing what the user did.
+* ``_pipeline_lock`` keeps the ``notify_on_busy`` knob for backward
+  compatibility (one call-site, tests), but the default is now False
+  and ``stop_and_run`` no longer passes True.
+* Lock-during-recording (`state == "recording"`) is still a silent
+  drop — pressing F9 again before the first audio chunk lands is
+  almost always a Hyprland key-repeat artefact, not an intent to
+  cancel.
+* Risk: SIGINT to the holder propagates KeyboardInterrupt up its
+  call stack; if a caller catches `BaseException` it could swallow
+  it. Audited the pipeline path — only `Exception` is caught, so
+  KeyboardInterrupt always escapes to the ``finally`` clause.
+
+---
+
 ## ADR-0026 — Per-turn HUD as an in-process PyQt6 widget (replaces libnotify replace-id)
 
 Date: 2026-05-19

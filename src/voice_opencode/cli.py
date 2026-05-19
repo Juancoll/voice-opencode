@@ -39,7 +39,6 @@ from pathlib import Path
 from . import agent, audio, config, desktop, paths, pipeline, screenshot, state, tts
 from . import platform as plat
 from .logging import log
-from .notify import notify
 from .opencode_client import Session, health
 from .platform.base import BackendError, NotSupportedError
 
@@ -88,7 +87,6 @@ def cmd_session(args: list[str]) -> int:
     if sub == "reset":
         Session.forget()
         log("Session forgotten.")
-        notify("🆕 Sesión reiniciada", "")
     elif sub in ("status", "id"):
         sid = Session.current_id()
         print(sid or "<none>")
@@ -138,7 +136,6 @@ def cmd_ask(args: list[str]) -> int:
         reply = Session.get_or_create().ask(msg, screenshot=shot)
     except Exception as e:
         _eprint(f"opencode error: {e}")
-        notify("❌ opencode", str(e)[:200], urgency="critical")
         return 1
     print(reply)
     if not no_tts:
@@ -205,14 +202,12 @@ def cmd_state(_: list[str]) -> int:
 def cmd_pause(_: list[str]) -> int:
     state.set_paused(True)
     log("Paused.")
-    notify("⏸  Voice en pausa", "F9 ignorado hasta que reanudes")
     return 0
 
 
 def cmd_resume(_: list[str]) -> int:
     state.set_paused(False)
     log("Resumed.")
-    notify("▶  Voice reanudado", "")
     return 0
 
 

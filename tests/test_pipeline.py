@@ -34,13 +34,21 @@ from voice_opencode import pipeline
 
 @pytest.fixture
 def isolated_lock(tmp_path, monkeypatch):
-    """Redirect lockfile into tmp_path; mute log/notify/state."""
+    """Redirect lockfile into tmp_path; mute log/state/HUD."""
     lock_file = tmp_path / "pipeline.lock"
     monkeypatch.setattr(pipeline, "PIPELINE_LOCK_FILE", lock_file)
     monkeypatch.setattr(pipeline, "ensure_dirs", lambda: None)
     monkeypatch.setattr(pipeline, "log", MagicMock())
-    monkeypatch.setattr(pipeline, "notify", MagicMock())
     monkeypatch.setattr(pipeline, "set_state", MagicMock())
+    monkeypatch.setattr(pipeline, "turn_start", MagicMock())
+    monkeypatch.setattr(pipeline, "turn_update", MagicMock())
+    monkeypatch.setattr(pipeline, "turn_end", MagicMock())
+    # Default to 'idle' so the cancel-on-busy branch in stop_and_run
+    # never fires unless a test explicitly opts in.
+    monkeypatch.setattr(
+        pipeline.state_mod, "get_state",
+        MagicMock(return_value="idle"),
+    )
     return lock_file
 
 
@@ -71,17 +79,8 @@ def test_lock_dropped_when_live_holder_is_fresh(isolated_lock):
     with pipeline._pipeline_lock("test") as acquired:
         assert acquired is False
     assert isolated_lock.exists()  # holder still owns it
-    # Default behaviour: low-urgency toast emitted so the user sees feedback.
-    assert pipeline.notify.call_args.kwargs.get("urgency") == "low"
-
-
-def test_lock_dropped_silently_when_notify_on_busy_false(isolated_lock):
-    """Used by start_recording to suppress toasts on F9 key-repeat."""
-    _write_lockfile(isolated_lock, os.getpid(), int(time.time() * 1000))
-    with pipeline._pipeline_lock("test", notify_on_busy=False) as acquired:
-        assert acquired is False
-    pipeline.notify.assert_not_called()
-    # The log line still appears so silent drops remain diagnosable.
+    # ADR-0027: the contention path is always silent (HUD already
+    # shows the running turn's state). The log line still appears.
     logged = " | ".join(call.args[0] for call in pipeline.log.call_args_list)
     assert "Pipeline busy" in logged
 
@@ -152,15 +151,18 @@ def test_start_recording_dropped_when_lock_held_live(isolated_lock):
         audio_start.assert_not_called()
 
 
-def test_start_recording_dropped_is_silent_no_notify(isolated_lock):
-    """F9 key-repeat / double-tap must NOT pop a toast on every press."""
+def test_start_recording_dropped_is_silent(isolated_lock):
+    """F9 key-repeat / double-tap must NOT do anything visible.
+
+    ADR-0027: there's no libnotify path left in pipeline at all,
+    so the only thing to assert is that audio.start wasn't called.
+    """
     _write_lockfile(isolated_lock, os.getpid(), int(time.time() * 1000))
     with patch.object(pipeline.agent, "is_blocking", return_value=False), \
          patch.object(pipeline.audio, "is_recording", return_value=False), \
-         patch.object(pipeline.audio, "start"):
+         patch.object(pipeline.audio, "start") as audio_start:
         pipeline.start_recording()
-        # Zero notify calls — the whole point of the silent drop.
-        pipeline.notify.assert_not_called()
+        audio_start.assert_not_called()
 
 
 def test_start_recording_dropped_logs_specific_message(isolated_lock):
@@ -183,8 +185,6 @@ def test_start_recording_dropped_when_audio_already_recording(isolated_lock):
          patch.object(pipeline.audio, "start") as audio_start:
         pipeline.start_recording()
         audio_start.assert_not_called()
-    # No toast on this path either.
-    pipeline.notify.assert_not_called()
     # Lockfile must not have been touched.
     assert not isolated_lock.exists()
 
@@ -238,19 +238,89 @@ def test_stop_and_run_happy_path_speaks_once(isolated_lock):
     assert not isolated_lock.exists()
 
 
-def test_stop_and_run_dropped_when_lock_held_live(isolated_lock):
+def test_stop_and_run_dropped_when_lock_held_live_and_state_idle(isolated_lock):
+    """When held by a live holder but state is 'idle' (e.g. holder
+    is still in the brief setup window), no cancel: just drop."""
     _write_lockfile(isolated_lock, os.getpid(), int(time.time() * 1000))
-    with patch.object(pipeline.audio, "stop") as audio_stop, \
+    with patch.object(pipeline.state_mod, "get_state", return_value="idle"), \
+         patch.object(pipeline.audio, "stop") as audio_stop, \
          patch.object(pipeline.stt, "transcribe") as transcribe, \
-         patch.object(pipeline.tts, "speak") as speak:
+         patch.object(pipeline.tts, "speak") as speak, \
+         patch.object(pipeline, "_cancel_active_turn") as cancel:
         pipeline.stop_and_run()
         audio_stop.assert_not_called()
         transcribe.assert_not_called()
         speak.assert_not_called()
-    # Unlike start_recording, stop_and_run KEEPS the toast — if you
-    # release F9 mid-reply and nothing happens, you deserve feedback.
-    pipeline.notify.assert_called_once()
-    assert pipeline.notify.call_args.kwargs.get("urgency") == "low"
+        cancel.assert_not_called()
+
+
+@pytest.mark.parametrize("phase", ["thinking", "speaking"])
+def test_stop_and_run_cancels_when_busy_in_cancellable_phase(isolated_lock, phase):
+    """F9 mid-turn during thinking/speaking aborts the held turn."""
+    _write_lockfile(isolated_lock, os.getpid(), int(time.time() * 1000))
+    with patch.object(pipeline.state_mod, "get_state", return_value=phase), \
+         patch.object(pipeline, "_cancel_active_turn") as cancel, \
+         patch.object(pipeline.audio, "stop") as audio_stop:
+        pipeline.stop_and_run()
+        cancel.assert_called_once_with(os.getpid())
+        # Holder is signalled; we do NOT proceed into a new pipeline.
+        audio_stop.assert_not_called()
+    # Lock file still owned by the (simulated) holder — canceller does
+    # not unlink, the dying holder's finally clause does.
+    assert isolated_lock.exists()
+
+
+def test_stop_and_run_does_not_cancel_when_holder_pid_dead(isolated_lock):
+    """If the lockholder is dead, we steal and run, not cancel."""
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    _write_lockfile(isolated_lock, pid, int(time.time() * 1000))
+    with patch.object(pipeline.state_mod, "get_state", return_value="thinking"), \
+         patch.object(pipeline, "_cancel_active_turn") as cancel, \
+         patch.object(pipeline.audio, "stop", return_value=None):
+        pipeline.stop_and_run()
+        cancel.assert_not_called()
+
+
+def test_cancel_active_turn_signals_pid_and_calls_abort(isolated_lock):
+    """_cancel_active_turn aborts session, SIGINTs holder, closes HUD."""
+    with patch.object(pipeline.Session, "current_id", return_value="sess-1"), \
+         patch.object(pipeline.Session, "__init__", return_value=None) as init, \
+         patch.object(pipeline.Session, "abort") as abort, \
+         patch("voice_opencode.pipeline.os.kill") as kill, \
+         patch("voice_opencode.pipeline.subprocess.run") as run, \
+         patch("voice_opencode.pipeline.set_state") as set_st, \
+         patch("voice_opencode.pipeline.turn_update") as upd, \
+         patch("voice_opencode.pipeline.turn_end") as end:
+        pipeline._cancel_active_turn(12345)
+        init.assert_called_once_with("sess-1")
+        abort.assert_called_once()
+        kill.assert_called_once()
+        # SIGINT (not SIGTERM) so the holder's finally clause runs.
+        import signal as _sig
+        assert kill.call_args.args == (12345, _sig.SIGINT)
+        # pkill paplay was attempted.
+        assert run.call_args.args[0][:2] == ["pkill", "-x"]
+        set_st.assert_called_with("idle")
+        upd.assert_called_once()
+        end.assert_called_once()
+
+
+def test_cancel_active_turn_survives_dead_pid(isolated_lock):
+    """Signalling a dead pid is a no-op, not a crash."""
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    with patch.object(pipeline.Session, "current_id", return_value=None), \
+         patch("voice_opencode.pipeline.subprocess.run"), \
+         patch("voice_opencode.pipeline.set_state"), \
+         patch("voice_opencode.pipeline.turn_update"), \
+         patch("voice_opencode.pipeline.turn_end"):
+        # Must not raise.
+        pipeline._cancel_active_turn(pid)
 
 
 def test_stop_and_run_releases_lock_on_tts_exception(isolated_lock):
