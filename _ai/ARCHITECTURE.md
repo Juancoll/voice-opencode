@@ -16,10 +16,11 @@ voice-opencode/
 │   ├── tts.py                     # voice metadata + clean_for_tts + speak() (→ platform.tts + platform.player) — ADR-0023
 │   ├── screenshot.py              # shim → platform.screen
 │   ├── desktop.py                 # shim → platform.input + platform.wm
-│   ├── opencode_client.py         # health() + Session class
+│   ├── opencode_client.py         # OpencodeBackend + Session shim — ADR-0029
+│   ├── llm.py                     # LLMBackend Protocol + get_backend() — ADR-0029
 │   ├── agent.py                   # MCP agent-mode lock + audit log
 │   ├── mcp_server.py              # capability-driven MCP server (stdio)
-│   ├── pipeline.py                # orchestration: rec → stt → opencode → tts
+│   ├── pipeline.py                # orchestration: rec → stt → llm → tts
 │   ├── cli.py                     # dispatcher: grouped + legacy aliases
 │   ├── tray.py                    # PyQt6 QSystemTrayIcon
 │   ├── audit_viewer.py            # Qt dialog tailing agent.log (Phase J)

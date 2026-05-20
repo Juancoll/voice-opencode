@@ -3,6 +3,95 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-20 — Streaming LLM (ADR-0030 phase 1) + revert ADR-0028 HUD parking
+
+Added end-to-end streaming of LLM replies. The pipeline now consumes
+``OpencodeBackend.ask_stream`` (SSE) and updates the HUD subtitle in
+real time with the last ~80 chars of the partial reply, throttled to
+once per 80ms. The contract is captured in ``LLMBackend.ask_stream``
+on the Protocol introduced in ADR-0029; ``ask()`` collapses to a
+``"".join(ask_stream(...)).strip()`` wrapper.
+
+The opencode adapter opens ``GET /event`` *before* the POST so no
+opening deltas are missed, POSTs on a background thread, filters
+``message.part.delta`` events by ``sessionID`` and ``field=="text"``,
+and stops on ``session.idle`` / ``session.error``. Cumulative
+snapshots (``message.part.updated``) are deliberately ignored to
+avoid double-emitting text already seen as deltas. On SSE or POST
+failure ``self.abort()`` is called before re-raising, same contract
+as non-streaming ``ask``.
+
+Verified live against the real ``opencode serve``: a "1 al 5" prompt
+returned 2 deltas in 6.75s wall-clock, first delta @ 5.58s, full
+reply correctly reconstructed. Stream-level diagnostics are emitted
+to ``voice.log``: ``SSE: first delta after N events``, ``SSE: stream
+closed (events=X, deltas=Y)``, ``Stream finished: N deltas, M HUD
+updates, reply=X chars``.
+
+While iterating I also reverted ADR-0028's ``_hud_offscreen``
+helper. The user reported that parking the HUD off-screen during
+``grim`` produced a visible "blink" — the widget vanished between
+recording-stop and the first LLM delta (5+ seconds with the new
+streaming pipeline), and they perceived it as the agent crashing.
+We chose to accept HUD pixels in the screenshot instead. Removed:
+``screenshot._hud_offscreen``, ``screenshot._hyprctl_dispatch``,
+``screenshot._HUD_PARK_*`` constants, the unused ``relocate`` op
+on the HUD socket, and the 3 corresponding tests in
+``tests/test_screen_active_monitor.py``. Kept the
+``test_capture_returns_none_when_screenshots_disabled`` test
+(rewritten without the parking helper).
+
+Also silenced a 1 line/sec log spam: ``get_backend()`` was logging
+``LLM backend: opencode`` at every call, and the tray spawns a
+fresh ``voice state`` CLI process every second.
+
+Tests: 467 passing, ruff + mypy clean.
+
+## 2026-05-20 — LLM backend abstraction (ADR-0029)
+
+User raised the concern that the pipeline was hard-wired to
+``opencode serve`` and asked whether other agents (Claude Code,
+Hermes, Ollama, …) could be swapped in. They picked the lightest
+option: refactor the interface now, keep ``opencode`` as the only
+implementation, leave alternative adapters as future work.
+Selection is config-only (env var or ``config.json``) — no runtime
+CLI swap.
+
+Added ``src/voice_opencode/llm.py`` with a ``@runtime_checkable``
+``LLMBackend`` Protocol and a singleton factory ``get_backend()``.
+Moved the opencode HTTP logic into a new ``OpencodeBackend`` class
+inside ``opencode_client.py``; kept the old ``Session`` class as a
+thin shim that delegates to the backend, so external scripts that
+still ``from .opencode_client import Session`` keep working.
+
+Wired ``settings.llm_backend = "opencode"`` (env override
+``VOICE_LLM_BACKEND``) and made ``config.reload()`` call
+``llm.reset_backend_cache()`` so a config change re-resolves the
+backend on the next call. Refactored ``pipeline.py`` and ``cli.py``
+to drop direct ``Session``/``health`` imports — both now go through
+``get_backend()`` and use ``backend.name`` in error messages so
+swapping in another backend tomorrow shows the right HUD label
+without code changes.
+
+``conftest.tmp_state`` now reloads ``opencode_client`` and ``llm``
+alongside the existing reload of ``paths``/``state``/``agent``, and
+calls ``reset_backend_cache()`` — without this, tests using the
+cached singleton fail under full-suite runs because ``importlib.reload``
+creates a fresh class object that breaks ``isinstance``.
+
+Added ``tests/test_llm_backend.py`` (10 tests): Protocol contract,
+factory caching, unknown-name failure, env-var override,
+``config.reload()`` invalidation, opencode adapter ``session_id`` /
+``abort`` paths. Updated ``tests/test_cli.py`` (2 tests) and
+``tests/test_pipeline.py`` (5 tests) to patch ``get_backend`` instead
+of ``Session``.
+
+Net: +1 module, +1 class, +10/+0 tests, refactor of two callers.
+**462 tests / ruff / mypy green.** Live behaviour unchanged because
+``opencode`` is still the only backend — but the seam is now in
+place: adding Claude Code would be one new file + one ``elif`` in
+``get_backend()``, with the pipeline untouched.
+
 ## 2026-05-20 — Screenshot captures the *right* monitor + HUD parked during grim (ADR-0028)
 
 Live test right after ADR-0027 surfaced two stacked bugs in the

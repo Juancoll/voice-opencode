@@ -230,12 +230,39 @@ def test_stop_and_run_happy_path_speaks_once(isolated_lock):
     with patch.object(pipeline.audio, "stop", return_value=MagicMock(spec=Path)), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline, "capture", return_value=None), \
-         patch.object(pipeline.Session, "get_or_create") as get_session, \
+         patch.object(pipeline, "get_backend") as get_backend, \
          patch.object(pipeline.tts, "speak") as speak:
-        get_session.return_value.ask.return_value = "respuesta"
+        get_backend.return_value.name = "opencode"
+        get_backend.return_value.ask_stream.return_value = iter(["respuesta"])
         pipeline.stop_and_run()
         speak.assert_called_once_with("respuesta")
     assert not isolated_lock.exists()
+
+
+def test_stop_and_run_streams_partial_text_to_hud(isolated_lock):
+    """Phase 1 streaming: each delta should refresh the HUD subtitle
+    *before* the full reply is available, and the final speak() gets
+    the full concatenation."""
+    with patch.object(pipeline.audio, "stop", return_value=MagicMock(spec=Path)), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline, "capture", return_value=None), \
+         patch.object(pipeline, "get_backend") as get_backend, \
+         patch.object(pipeline, "turn_update") as upd, \
+         patch.object(pipeline.tts, "speak") as speak, \
+         patch.object(pipeline.time, "monotonic", side_effect=[i * 1.0 for i in range(100)]):
+        get_backend.return_value.name = "opencode"
+        get_backend.return_value.ask_stream.return_value = iter(
+            ["Hola, ", "¿cómo ", "estás?"]
+        )
+        pipeline.stop_and_run()
+    # Speak got the joined reply, stripped.
+    speak.assert_called_once_with("Hola, ¿cómo estás?")
+    # HUD saw at least one "Pensando…" with cumulative text.
+    pensando_calls = [
+        c for c in upd.call_args_list
+        if c.args and c.args[0] == "🧠 Pensando…" and "Hola" in (c.args[1] if len(c.args) > 1 else "")
+    ]
+    assert pensando_calls, f"no streaming HUD update saw 'Hola' in {upd.call_args_list}"
 
 
 def test_stop_and_run_dropped_when_lock_held_live_and_state_idle(isolated_lock):
@@ -286,17 +313,16 @@ def test_stop_and_run_does_not_cancel_when_holder_pid_dead(isolated_lock):
 
 def test_cancel_active_turn_signals_pid_and_calls_abort(isolated_lock):
     """_cancel_active_turn aborts session, SIGINTs holder, closes HUD."""
-    with patch.object(pipeline.Session, "current_id", return_value="sess-1"), \
-         patch.object(pipeline.Session, "__init__", return_value=None) as init, \
-         patch.object(pipeline.Session, "abort") as abort, \
+    with patch.object(pipeline, "get_backend") as get_backend, \
          patch("voice_opencode.pipeline.os.kill") as kill, \
          patch("voice_opencode.pipeline.subprocess.run") as run, \
          patch("voice_opencode.pipeline.set_state") as set_st, \
          patch("voice_opencode.pipeline.turn_update") as upd, \
          patch("voice_opencode.pipeline.turn_end") as end:
+        get_backend.return_value.name = "opencode"
+        get_backend.return_value.session_id.return_value = "sess-1"
         pipeline._cancel_active_turn(12345)
-        init.assert_called_once_with("sess-1")
-        abort.assert_called_once()
+        get_backend.return_value.abort.assert_called_once()
         kill.assert_called_once()
         # SIGINT (not SIGTERM) so the holder's finally clause runs.
         import signal as _sig
@@ -314,11 +340,12 @@ def test_cancel_active_turn_survives_dead_pid(isolated_lock):
     if pid == 0:
         os._exit(0)
     os.waitpid(pid, 0)
-    with patch.object(pipeline.Session, "current_id", return_value=None), \
+    with patch.object(pipeline, "get_backend") as get_backend, \
          patch("voice_opencode.pipeline.subprocess.run"), \
          patch("voice_opencode.pipeline.set_state"), \
          patch("voice_opencode.pipeline.turn_update"), \
          patch("voice_opencode.pipeline.turn_end"):
+        get_backend.return_value.session_id.return_value = None
         # Must not raise.
         pipeline._cancel_active_turn(pid)
 
@@ -328,9 +355,10 @@ def test_stop_and_run_releases_lock_on_tts_exception(isolated_lock):
     with patch.object(pipeline.audio, "stop", return_value=MagicMock(spec=Path)), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline, "capture", return_value=None), \
-         patch.object(pipeline.Session, "get_or_create") as get_session, \
+         patch.object(pipeline, "get_backend") as get_backend, \
          patch.object(pipeline.tts, "speak", side_effect=RuntimeError("piper died")):
-        get_session.return_value.ask.return_value = "respuesta"
+        get_backend.return_value.name = "opencode"
+        get_backend.return_value.ask_stream.return_value = iter(["respuesta"])
         pipeline.stop_and_run()  # internal try/except catches it
     assert not isolated_lock.exists()
 
@@ -359,9 +387,10 @@ def test_concurrent_stop_and_run_only_one_speaks(isolated_lock):
     with patch.object(pipeline.audio, "stop", return_value=MagicMock(spec=Path)), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline, "capture", return_value=None), \
-         patch.object(pipeline.Session, "get_or_create") as get_session, \
+         patch.object(pipeline, "get_backend") as get_backend, \
          patch.object(pipeline.tts, "speak", side_effect=slow_speak):
-        get_session.return_value.ask.return_value = "respuesta"
+        get_backend.return_value.name = "opencode"
+        get_backend.return_value.ask_stream.return_value = iter(["respuesta"])
 
         t1 = threading.Thread(target=pipeline.stop_and_run)
         t1.start()

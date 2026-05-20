@@ -7,6 +7,215 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0030 — Streaming LLM replies via SSE (revert ADR-0028)
+
+Date: 2026-05-20
+
+### Context
+
+With the non-streaming ``ask()`` path the user sat in front of a
+static "🧠 Pensando…" HUD for 19–74 seconds per turn (90–95% of the
+wall-clock of an average turn). They had no signal that the model
+was alive, much less *what* it was about to say. opencode's HTTP
+API already exposes a Server-Sent-Events feed at ``GET /event`` that
+emits ``message.part.delta`` events as the model generates — we just
+weren't consuming it.
+
+A separate user-visible bug emerged during the iteration: ADR-0028
+parked the HUD off-screen with ``hyprctl movewindowpixel`` while
+``grim`` ran, to keep "Pensando…" out of the screenshot. With the
+new streaming code the first delta now arrives 5+ seconds after the
+screenshot, which means the HUD stayed at (-99999, -99999) for the
+whole gap — the user perceived this as "the agent closes the window
+mid-turn".
+
+### Decision
+
+1. Add ``ask_stream(prompt, screenshot) -> Iterator[str]`` to the
+   ``LLMBackend`` Protocol from ADR-0029. ``ask()`` becomes a
+   ``"".join(ask_stream(...)).strip()`` wrapper.
+
+2. ``OpencodeBackend.ask_stream``:
+   * opens ``GET /event`` **before** posting the message, so no
+     opening deltas are missed;
+   * POSTs on a background thread (the SSE iterator drives the
+     generator on the foreground thread);
+   * filters events by ``properties.sessionID`` (when present) and
+     yields only ``message.part.delta`` events with ``field=="text"``;
+   * stops on ``session.idle`` or ``session.error`` for our session;
+   * ignores ``message.part.updated`` snapshots — they're cumulative
+     and would double-emit text already seen as deltas;
+   * on SSE-connect or POST failure calls ``self.abort()`` first,
+     then re-raises (same contract as non-streaming ``ask``).
+
+3. ``pipeline.stop_and_run`` iterates the stream, accumulates the
+   reply in a list, and calls ``turn_update("🧠 Pensando…", tail)``
+   every ~80ms with the last 80 chars of the partial reply. TTS sees
+   the same fully-joined reply it always did — no change to the
+   speak path in this phase.
+
+4. **Revert ADR-0028.** Delete ``screenshot._hud_offscreen``,
+   ``_hyprctl_dispatch``, ``_HUD_PARK_*`` constants and the
+   ``relocate`` op on the HUD socket. Accept that "🧠 Pensando…"
+   shows up in the screenshot; the model occasionally references it
+   but that's a softer failure than a HUD flicker the user reads as
+   a crash.
+
+### Alternatives considered
+
+* **Token-by-token output via the OpenAI streaming endpoint.** Would
+  give us a smoother HUD scroll, but bypasses opencode's session
+  model (tools, MCP servers, screenshots-as-parts) which we depend
+  on. Rejected.
+
+* **Polling ``GET /session/.../message`` for partial state.** Simpler
+  client code, but the API only commits *complete* parts, so this
+  is effectively non-streaming. Rejected.
+
+* **Keep the parking helper, send a "relocate" op on context exit.**
+  Tried and discarded: the user reported the resulting flicker
+  (move-off, screenshot, move-back) was worse than just accepting
+  the HUD pixels in the shot.
+
+### Consequences
+
+* HUD updates while the model talks; first visible motion is bounded
+  by how soon the provider emits its first delta (~5s for
+  claude-opus-4.7 via copilot in our measurements).
+
+* TTS still waits for the *full* reply — Phase 2 (streamed TTS by
+  sentence) is a follow-up ADR, not in scope here.
+
+* Chunk granularity is provider-dependent. claude-opus-4.7 ships
+  whole sentences per delta; other providers (raw Anthropic, OpenAI)
+  will produce many small deltas. The HUD throttle (80ms) hides the
+  difference.
+
+* F9-cancel mid-turn still works: ``abort()`` aborts the in-flight
+  POST and the SSE iterator unblocks at the next event, then the
+  ``finally`` closes the connection.
+
+* Diagnostics: ``logs/voice.log`` gains ``SSE: first delta after N
+  events``, ``SSE: session.idle received, closing stream``, ``SSE:
+  stream closed (events=X, deltas=Y)``, and ``Stream finished: N
+  deltas, M HUD updates, reply=X chars``.
+
+* Tests: 7 new in ``tests/test_llm_stream.py`` (delta order, session
+  filter, non-text field filter, stop-on-idle, ask-as-wrapper,
+  abort-on-SSE-error, abort-on-POST-error) plus
+  ``test_stop_and_run_streams_partial_text_to_hud`` in the pipeline
+  suite. ADR-0028's screenshot-parking tests deleted (3 of them).
+
+* Live verification: a "1 al 5" prompt against the real
+  ``opencode serve`` returned 2 deltas over 6.75s wall-clock (first
+  delta @ 5.58s), full reply reconstructed correctly.
+
+---
+
+## ADR-0029 — LLM backend abstraction (Protocol + factory)
+
+Date: 2026-05-20
+
+### Context
+
+The pipeline was hard-wired to ``opencode serve``: ``pipeline.py`` and
+``cli.py`` both did ``from .opencode_client import Session`` and
+called HTTP-specific methods directly. The user asked whether the
+agent could be swapped for Claude Code, Hermes, Ollama, etc. — a
+reasonable ask: opencode is one of many local agent frontends, and
+locking the voice loop to a single vendor defeats the "fully local,
+your-choice-of-model" promise.
+
+There are two natural shapes for this kind of swap:
+
+* **Subclass / factory** — define an abstract base class, ship one
+  subclass per backend, pick at runtime.
+* **Protocol + factory** — define a structural type (PEP 544), let
+  each backend be a plain class with the right methods, pick at
+  runtime.
+
+The second is lighter — no ``ABC`` inheritance noise, easier to
+satisfy from an existing class, plays well with ``isinstance``
+checks thanks to ``@runtime_checkable``.
+
+### Decision
+
+Introduce ``voice_opencode.llm`` with:
+
+* ``LLMBackend`` (``@runtime_checkable Protocol``): contract every
+  backend must satisfy — ``name``, ``health()``, ``session_id()``,
+  ``ensure_session()``, ``ask(prompt, screenshot)``, ``abort()``,
+  ``forget()``.
+* ``get_backend()`` — module-level singleton factory. Reads
+  ``settings.llm_backend`` once, instantiates the matching adapter,
+  caches it. Unknown name → ``RuntimeError`` (fail-loud, never
+  silently fall back).
+* ``reset_backend_cache()`` — drops the singleton; wired into
+  ``config.reload()`` so a config change re-resolves on next
+  ``get_backend()`` call.
+
+Selection is **config-only** (``VOICE_LLM_BACKEND`` env var or
+``llm_backend`` in ``config.json``). No CLI command swaps backends at
+runtime: a turn that started against backend A and finished against
+backend B would be a debugging nightmare.
+
+Move the existing opencode HTTP logic into ``OpencodeBackend`` (new
+class in ``opencode_client.py``) implementing the Protocol. The old
+``Session`` class is kept as a thin compatibility shim — it now
+delegates to ``OpencodeBackend`` — so any external scripts importing
+it continue to work, but new code uses ``get_backend()``.
+
+``pipeline.py`` and ``cli.py`` lose all direct references to
+``Session``/``health`` and go through ``get_backend()``. Error
+messages now interpolate ``backend.name`` (e.g. ``❌ opencode``
+becomes dynamic), so swapping in a different backend shows the right
+label in the HUD without code changes.
+
+Screenshot handling is **per-backend**: ``ask()`` accepts a
+``Path | None``; each implementation decides whether to inline as a
+data URL (opencode), upload, or ignore. We deliberately do *not*
+expose a ``supports_vision`` flag — the screenshot is captured
+unconditionally because (a) ADR-0028 already made capture cheap
+(local grim), and (b) a backend that ignores it costs nothing.
+
+### Alternatives considered
+
+* **Plugin discovery via entry points.** Overkill for an in-tree
+  refactor; would only matter if backends shipped as separate
+  packages. Rejected for now.
+* **Per-turn backend selection.** Lets the user say "ask claude
+  about this one". Rejected — state of the conversation is
+  per-backend, so mixing creates broken sessions. Revisit only if a
+  concrete need emerges.
+* **Drop ``Session`` shim.** Cleanest API but breaks any external
+  caller (notably hand-written debug scripts the user mentioned).
+  Cheaper to keep the shim and mark it legacy in the docstring.
+* **Abstract base class.** Forces every backend to inherit from a
+  voice-opencode type, complicating reuse if someone wants to wrap
+  an existing client. Protocol is strictly more flexible.
+
+### Consequences
+
+* +1 module (``llm.py``), +1 class (``OpencodeBackend``), refactor of
+  ``pipeline.py`` + ``cli.py``. Net diff ~200 lines.
+* +10 tests in ``tests/test_llm_backend.py`` covering the Protocol
+  contract, factory caching, unknown-name failure, env-var override,
+  ``config.reload()`` cache invalidation, and the opencode adapter's
+  session-id + abort paths.
+* ``conftest.tmp_state`` now reloads ``opencode_client`` and ``llm``
+  alongside ``paths`` so test isolation extends to the backend
+  singleton. Without this, ``isinstance(b, OpencodeBackend)`` can
+  fail under parallel-file runs because reload creates a new class
+  object.
+* Adding a new backend = one new file + one ``elif`` in
+  ``get_backend()``. No pipeline changes needed.
+* The HUD error label is now backend-dependent (``❌ opencode``,
+  ``❌ claude_code``, …). User-visible but consistent with logs.
+* Performance: zero. The factory caches the instance; ``ask()`` is
+  the same HTTP call it was before.
+
+---
+
 ## ADR-0028 — Screenshot captures the monitor of the active *window*, and hides the HUD during grim
 
 Date: 2026-05-20

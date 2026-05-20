@@ -22,15 +22,18 @@ def test_legacy_voices_dispatches_to_tts_voices(tmp_state):
 
 def test_grouped_session_reset(tmp_state):
     from voice_opencode import cli
-    with patch.object(cli.Session, "forget") as forget:
+    with patch.object(cli, "get_backend") as gb:
         rc = cli.main(["session", "reset"])
     assert rc == 0
-    forget.assert_called_once()
+    gb.return_value.forget.assert_called_once()
 
 
 def test_state_outputs_json(tmp_state, capsys):
     from voice_opencode import cli
-    with patch.object(cli, "health", return_value=False):
+    with patch.object(cli, "get_backend") as gb:
+        gb.return_value.name = "opencode"
+        gb.return_value.health.return_value = False
+        gb.return_value.session_id.return_value = None
         rc = cli.main(["state"])
     assert rc == 0
     out = capsys.readouterr().out.strip()
@@ -38,6 +41,7 @@ def test_state_outputs_json(tmp_state, capsys):
     data = json.loads(out)
     assert data["state"] == "idle"
     assert data["server"] is False
+    assert data["backend"] == "opencode"
 
 
 def test_unknown_command_returns_nonzero(tmp_state):

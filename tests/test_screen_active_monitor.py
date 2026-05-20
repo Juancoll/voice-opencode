@@ -153,90 +153,24 @@ def test_active_window_monitor_name_returns_none_when_id_missing(
 
 
 # ---------------------------------------------------------------------------
-# screenshot._hud_offscreen — HUD parked during grim
+# screenshot.capture — settings gating
 # ---------------------------------------------------------------------------
-def test_hud_offscreen_dispatches_park_then_yields(monkeypatch):
-    """Entering the context must hyprctl-dispatch the HUD off-screen."""
-    from voice_opencode import screenshot as s
-
-    calls: list[tuple[str, str]] = []
-
-    def fake_dispatch(cmd, arg):
-        calls.append((cmd, arg))
-        return True
-
-    monkeypatch.setattr(s, "_hyprctl_dispatch", fake_dispatch)
-    monkeypatch.setattr(s.time, "sleep", lambda _t: None)
-
-    with s._hud_offscreen():
-        pass
-
-    # Exactly one dispatch (park). We deliberately do NOT restore on
-    # exit — the next turn_update repositions the HUD.
-    assert len(calls) == 1
-    cmd, arg = calls[0]
-    assert cmd == "movewindowpixel"
-    assert s._HUD_TITLE_SEL in arg
-    # Argument carries an off-screen coord, not (0,0).
-    assert "-99999" in arg
-
-
-def test_hud_offscreen_is_silent_noop_without_hyprctl(monkeypatch):
-    """On X11 / other compositors the helper must not raise."""
-    from voice_opencode import screenshot as s
-
-    monkeypatch.setattr(s.shutil, "which", lambda _: None)
-    monkeypatch.setattr(s.time, "sleep", lambda _t: None)
-
-    # Must complete without raising even with no hyprctl on PATH.
-    with s._hud_offscreen():
-        pass
-
-
-def test_capture_wraps_grim_in_hud_offscreen(monkeypatch, tmp_path):
-    """capture() must park the HUD before delegating to capture_to."""
-    from voice_opencode import screenshot as s
-
-    fake_settings = MagicMock(screenshot=True, screenshot_scope="monitor")
-    monkeypatch.setattr(s, "settings", fake_settings)
-    monkeypatch.setattr(s, "SCREENSHOT_FILE", tmp_path / "shot.png")
-
-    order: list[str] = []
-
-    @s.contextmanager
-    def fake_ctx():
-        order.append("park")
-        yield
-        order.append("after")
-
-    def fake_capture_to(path, scope):
-        order.append("grim")
-        path.write_bytes(b"\x89PNG fake")
-        return path
-
-    monkeypatch.setattr(s, "_hud_offscreen", fake_ctx)
-    monkeypatch.setattr(s, "capture_to", fake_capture_to)
-
-    out = s.capture()
-    assert out is not None and out.exists()
-    # grim must run STRICTLY between park and exit.
-    assert order == ["park", "grim", "after"]
-
+# Note: the older ``_hud_offscreen`` parking helper (ADR-0028) was removed
+# after the user reported that the resulting HUD flicker was worse than
+# accepting the HUD pixels in the screenshot. We now capture as-is.
 
 def test_capture_returns_none_when_screenshots_disabled(monkeypatch):
-    """settings.screenshot=False short-circuits before touching the HUD."""
+    """settings.screenshot=False short-circuits before calling capture_to."""
     from voice_opencode import screenshot as s
 
     fake_settings = MagicMock(screenshot=False)
     monkeypatch.setattr(s, "settings", fake_settings)
-    called = {"park": False}
+    called = {"capture_to": False}
 
-    @s.contextmanager
-    def fake_ctx():
-        called["park"] = True
-        yield
+    def fake_capture_to(path, scope):
+        called["capture_to"] = True
+        return path
 
-    monkeypatch.setattr(s, "_hud_offscreen", fake_ctx)
+    monkeypatch.setattr(s, "capture_to", fake_capture_to)
     assert s.capture() is None
-    # Did not even attempt to park the HUD.
-    assert called["park"] is False
+    assert called["capture_to"] is False

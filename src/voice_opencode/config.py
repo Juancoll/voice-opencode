@@ -42,6 +42,12 @@ class Settings:
     notify: bool = True
     opencode_host: str = "127.0.0.1"
     opencode_port: int = 4096
+    # LLM backend selection (ADR-0029). Known values:
+    #   "opencode" — local ``opencode serve`` HTTP API (default).
+    # Future backends (claude code CLI, ollama, hermes, …) plug in via
+    # ``voice_opencode.llm.get_backend``. Selection is config-only:
+    # changing this requires restarting the tray + ``opencode-serve``.
+    llm_backend: str = "opencode"
     # Force a specific platform/backend wiring. Empty = auto-detect.
     # See voice_opencode.platform for accepted values
     # (e.g. "linux-hyprland", "linux-x11", "linux-kde-wayland").
@@ -91,6 +97,7 @@ ENV_MAP: Final[dict[str, str]] = {
     "notify": "VOICE_NOTIFY",
     "opencode_host": "OPENCODE_HOST",
     "opencode_port": "OPENCODE_PORT",
+    "llm_backend": "VOICE_LLM_BACKEND",
     "platform_override": "VOICE_PLATFORM",
     "capacity_mode": "VOICE_CAPACITY_MODE",
 }
@@ -165,6 +172,16 @@ def reload() -> Settings:
     """Re-read config.json and env. Returns the fresh ``Settings``."""
     global settings
     settings = load()
+    # Drop the cached LLM backend so a config change (e.g. switching
+    # from opencode to a future backend) takes effect on the next
+    # ``get_backend()`` call. Import is local to avoid a cycle:
+    # llm.py imports config at module load.
+    try:
+        from . import llm as _llm
+
+        _llm.reset_backend_cache()
+    except ImportError:  # pragma: no cover — llm module always present
+        pass
     return settings
 
 

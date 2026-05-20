@@ -41,9 +41,9 @@ from collections.abc import Iterator
 
 from . import agent, audio, stt, tts
 from . import state as state_mod
+from .llm import get_backend
 from .logging import log
 from .notify import turn_end, turn_start, turn_update
-from .opencode_client import Session
 from .paths import PIPELINE_LOCK_FILE, ensure_dirs
 from .screenshot import capture
 from .state import set_state
@@ -67,7 +67,7 @@ def _cancel_active_turn(holder_pid: int) -> None:
 
     Order:
 
-    1. ``Session.abort()`` so the opencode server stops the runaway
+    1. ``backend.abort()`` so the agent server stops the runaway
        tool loop. Without this, killing the local process leaves the
        model still spinning server-side and the next ``ask()`` blocks
        on its `/event` stream until the previous run times out.
@@ -86,12 +86,13 @@ def _cancel_active_turn(holder_pid: int) -> None:
        the dying holder to update it.
     """
     try:
-        sid = Session.current_id()
+        backend = get_backend()
+        sid = backend.session_id()
         if sid:
-            Session(sid).abort()
-            log(f"Cancel: aborted opencode session {sid}.")
+            backend.abort()
+            log(f"Cancel: aborted {backend.name} session {sid}.")
     except Exception as e:  # pragma: no cover — defensive
-        log(f"Cancel: session.abort() failed: {e}")
+        log(f"Cancel: backend.abort() failed: {e}")
 
     try:
         os.kill(holder_pid, signal.SIGINT)
@@ -322,21 +323,46 @@ def stop_and_run() -> None:
 
         turn_update("🧠 Pensando…", text[:80])
 
-        # 2. Ask opencode (with optional screenshot)
+        # 2. Ask the LLM backend (with optional screenshot), streaming
+        # the reply into the HUD subtitle so the user sees progress
+        # instead of waiting on a static "Pensando…" for 30+ seconds.
+        # The subtitle is throttled to once per ~80ms and only shows
+        # the trailing window of the reply (keeps the HUD readable
+        # even on long answers).
         shot = capture()
-        session = Session.get_or_create()
+        backend = get_backend()
+        reply_parts: list[str] = []
+        last_hud_ts = 0.0
+        delta_count = 0
+        hud_update_count = 0
         try:
-            reply = session.ask(text, screenshot=shot)
+            for delta in backend.ask_stream(text, screenshot=shot):
+                if not delta:
+                    continue
+                reply_parts.append(delta)
+                delta_count += 1
+                now = time.monotonic()
+                if now - last_hud_ts >= 0.08:
+                    # Show last ~80 chars; full reply lives in
+                    # reply_parts and is the only thing TTS sees.
+                    tail = "".join(reply_parts)[-80:]
+                    turn_update("🧠 Pensando…", tail)
+                    last_hud_ts = now
+                    hud_update_count += 1
+            log(f"Stream finished: {delta_count} deltas, "
+                f"{hud_update_count} HUD updates, "
+                f"reply={len(''.join(reply_parts))} chars")
         except Exception as e:
-            log(f"opencode error: {e}")
+            log(f"{backend.name} error: {e}")
             # Make sure the server stops the runaway tool loop even if
-            # ask() already called abort() on Timeout — extra POST is
-            # cheap and idempotent.
-            session.abort()
+            # ask_stream() already called abort() on Timeout — extra
+            # POST is cheap and idempotent.
+            backend.abort()
             set_state("error")
-            turn_update("❌ opencode", str(e)[:120])
+            turn_update(f"❌ {backend.name}", str(e)[:120])
             turn_end()
             return
+        reply = "".join(reply_parts).strip()
         if not reply:
             set_state("idle")
             turn_update("🤐 Sin respuesta", "")

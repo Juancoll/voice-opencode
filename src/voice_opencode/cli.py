@@ -38,8 +38,8 @@ from pathlib import Path
 
 from . import agent, audio, config, desktop, paths, pipeline, screenshot, state, tts
 from . import platform as plat
+from .llm import get_backend
 from .logging import log
-from .opencode_client import Session, health
 from .platform.base import BackendError, NotSupportedError
 
 
@@ -84,12 +84,12 @@ def cmd_rec(args: list[str]) -> int:
 
 def cmd_session(args: list[str]) -> int:
     sub = args[0] if args else "status"
+    backend = get_backend()
     if sub == "reset":
-        Session.forget()
+        backend.forget()
         log("Session forgotten.")
     elif sub in ("status", "id"):
-        sid = Session.current_id()
-        print(sid or "<none>")
+        print(backend.session_id() or "<none>")
     else:
         _eprint(f"Unknown: session {sub}")
         return 1
@@ -132,10 +132,11 @@ def cmd_ask(args: list[str]) -> int:
         return 1
     msg = " ".join(args)
     shot = screenshot.capture()
+    backend = get_backend()
     try:
-        reply = Session.get_or_create().ask(msg, screenshot=shot)
+        reply = backend.ask(msg, screenshot=shot)
     except Exception as e:
-        _eprint(f"opencode error: {e}")
+        _eprint(f"{backend.name} error: {e}")
         return 1
     print(reply)
     if not no_tts:
@@ -181,14 +182,15 @@ def cmd_config(args: list[str]) -> int:
 
 
 def cmd_state(_: list[str]) -> int:
-    sid = Session.current_id()
+    backend = get_backend()
     out = {
         "state":      state.get_state(),
         "paused":     state.is_paused(),
         "agent":      agent.is_active(),
         "recording":  audio.is_recording(),
-        "server":     health(),
-        "session":    sid,
+        "server":     backend.health(),
+        "session":    backend.session_id(),
+        "backend":    backend.name,
         "voice":      config.settings.voice,
         "speaker_id": config.settings.speaker_id,
         "screenshot": config.settings.screenshot,
@@ -218,9 +220,11 @@ def cmd_tray(_: list[str]) -> int:
 
 def cmd_status(_: list[str]) -> int:
     s = config.settings
+    backend = get_backend()
     print("recording:       ", audio.is_recording())
-    print("server:          ", "up" if health() else "down")
-    print("session:         ", Session.current_id() or "<none>")
+    print("backend:         ", backend.name)
+    print("server:          ", "up" if backend.health() else "down")
+    print("session:         ", backend.session_id() or "<none>")
     print()
     print("voice:           ", s.voice, f"(speaker_id={s.speaker_id})")
     print("whisper model:   ", s.whisper_model, f"(lang={s.whisper_lang})")
@@ -253,14 +257,14 @@ def cmd_mcp(args: list[str]) -> int:
     if sub == "stop":
         import signal
         import subprocess as sp
-        # 1. Abort the active opencode session so the model stops calling
+        # 1. Abort the active LLM session so the model stops calling
         #    tools mid-loop (otherwise killing the MCP server only causes
         #    every next tool call to fail; the model keeps thinking).
         try:
-            from .opencode_client import Session
-            sid = Session.current_id()
+            backend = get_backend()
+            sid = backend.session_id()
             if sid:
-                Session(sid).abort()
+                backend.abort()
                 print(f"aborted session {sid}")
         except Exception as e:
             print(f"abort failed: {e}")
