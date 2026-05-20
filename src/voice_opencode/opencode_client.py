@@ -182,6 +182,8 @@ class OpencodeBackend:
         # POST thread finishes (in case of error/abort).
         delta_count = 0
         event_count = 0
+        last_etype: str | None = None
+        error_evt: dict | None = None
         try:
             for raw in sse.iter_lines(decode_unicode=True):
                 # requests' stub types raw as bytes even with
@@ -196,6 +198,7 @@ class OpencodeBackend:
                     continue
                 event_count += 1
                 etype = evt.get("type")
+                last_etype = etype
                 props = evt.get("properties") or {}
                 # Hard filter: ignore events for other sessions.
                 # Some events (server.connected, server.heartbeat) have no
@@ -203,6 +206,10 @@ class OpencodeBackend:
                 evt_sid = props.get("sessionID")
                 if evt_sid is not None and evt_sid != sid:
                     continue
+                # Trace every event we accept so the log shows the full
+                # SSE timeline. Truncated to keep voice.log readable.
+                log(f"SSE evt#{event_count}: type={etype} "
+                    f"keys={sorted(props.keys())}")
                 if etype == "message.part.delta":
                     if props.get("field") == "text":
                         delta = props.get("delta") or ""
@@ -211,19 +218,42 @@ class OpencodeBackend:
                             if delta_count == 1:
                                 log(f"SSE: first delta after {event_count} events")
                             yield delta
-                elif etype in ("session.idle", "session.error"):
-                    log(f"SSE: {etype} received, closing stream "
+                elif etype == "session.idle":
+                    log(f"SSE: session.idle received, closing stream "
                         f"(events={event_count}, deltas={delta_count})")
+                    break
+                elif etype == "session.error":
+                    # Dump the entire event — we want every byte the
+                    # server sent so we can diagnose later without a
+                    # live repro. Slicing avoids drowning the log if
+                    # the server attaches a stack trace.
+                    raw_dump = json.dumps(evt)[:2000]
+                    log(f"SSE: session.error received "
+                        f"(events={event_count}, deltas={delta_count}); "
+                        f"event={raw_dump}")
+                    error_evt = evt
                     break
                 # We deliberately ignore message.updated /
                 # message.part.updated (cumulative snapshots) to avoid
                 # double-emitting text the caller already saw via deltas.
         finally:
-            log(f"SSE: stream closed (events={event_count}, deltas={delta_count})")
+            log(f"SSE: stream closed (events={event_count}, "
+                f"deltas={delta_count}, last_etype={last_etype})")
             try:
                 sse.close()
             except Exception:  # pragma: no cover — defensive
                 pass
+
+        # If the server reported session.error and nothing was emitted,
+        # propagate as a hard failure so the pipeline can show an error
+        # HUD instead of feeding "" to TTS. Caller already has the dump
+        # in voice.log for diagnosis.
+        if error_evt is not None and delta_count == 0:
+            err_props = error_evt.get("properties") or {}
+            err_data = err_props.get("error") or err_props
+            msg = json.dumps(err_data)[:200] if err_data else "session.error"
+            self.abort()
+            raise RuntimeError(f"opencode session.error: {msg}")
 
         # 5. Surface POST errors, if any. abort() so the server stops
         # the runaway loop (same contract as non-streaming ask).

@@ -296,8 +296,11 @@ def stop_and_run() -> None:
         if not acquired:
             return
 
+        t0 = time.monotonic()
+        log("=== turn start: stop_and_run ===")
         wav = audio.stop()
         if wav is None:
+            log(f"turn end: no audio (t={time.monotonic()-t0:.2f}s)")
             set_state("idle")
             turn_update("🤷 Sin audio", "")
             turn_end()
@@ -307,6 +310,7 @@ def stop_and_run() -> None:
         turn_update("🧠 Transcribiendo…", "")
 
         # 1. Transcribe
+        t_stt0 = time.monotonic()
         try:
             text = stt.transcribe(wav)
         except Exception as e:
@@ -315,6 +319,8 @@ def stop_and_run() -> None:
             turn_update("❌ Error STT", str(e)[:120])
             turn_end()
             return
+        log(f"turn: STT done in {time.monotonic()-t_stt0:.2f}s "
+            f"-> {text!r}")
         if not text:
             set_state("idle")
             turn_update("🤷 Nada que transcribir", "")
@@ -329,12 +335,16 @@ def stop_and_run() -> None:
         # The subtitle is throttled to once per ~80ms and only shows
         # the trailing window of the reply (keeps the HUD readable
         # even on long answers).
+        t_shot0 = time.monotonic()
         shot = capture()
+        log(f"turn: screenshot in {time.monotonic()-t_shot0:.2f}s "
+            f"(shot={shot is not None})")
         backend = get_backend()
         reply_parts: list[str] = []
         last_hud_ts = 0.0
         delta_count = 0
         hud_update_count = 0
+        t_llm0 = time.monotonic()
         try:
             for delta in backend.ask_stream(text, screenshot=shot):
                 if not delta:
@@ -349,11 +359,12 @@ def stop_and_run() -> None:
                     turn_update("🧠 Pensando…", tail)
                     last_hud_ts = now
                     hud_update_count += 1
-            log(f"Stream finished: {delta_count} deltas, "
-                f"{hud_update_count} HUD updates, "
-                f"reply={len(''.join(reply_parts))} chars")
+            log(f"turn: LLM stream done in {time.monotonic()-t_llm0:.2f}s "
+                f"({delta_count} deltas, {hud_update_count} HUD updates, "
+                f"reply={len(''.join(reply_parts))} chars)")
         except Exception as e:
-            log(f"{backend.name} error: {e}")
+            log(f"turn: LLM error after {time.monotonic()-t_llm0:.2f}s: "
+                f"{type(e).__name__}: {e}")
             # Make sure the server stops the runaway tool loop even if
             # ask_stream() already called abort() on Timeout — extra
             # POST is cheap and idempotent.
@@ -364,6 +375,7 @@ def stop_and_run() -> None:
             return
         reply = "".join(reply_parts).strip()
         if not reply:
+            log("turn: LLM produced empty reply; nothing to speak")
             set_state("idle")
             turn_update("🤐 Sin respuesta", "")
             turn_end()
@@ -373,17 +385,20 @@ def stop_and_run() -> None:
 
         # 3. Speak
         set_state("speaking")
+        t_tts0 = time.monotonic()
         try:
             tts.speak(reply)
         except Exception as e:
-            log(f"TTS error: {e}")
+            log(f"TTS error after {time.monotonic()-t_tts0:.2f}s: {e}")
             set_state("error")
             turn_update("❌ Error TTS", str(e)[:120])
             turn_end()
             return
+        log(f"turn: TTS done in {time.monotonic()-t_tts0:.2f}s")
 
         set_state("idle")
         turn_end()
+        log(f"=== turn end: total {time.monotonic()-t0:.2f}s ===")
 
 
 def toggle() -> None:
