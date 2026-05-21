@@ -90,11 +90,17 @@ class Settings:
     # listen to. Override in config.json to taste; set to empty
     # string to disable.
     voice_system_prompt: str = (
-        "Estás respondiendo por voz: sintetizar tu respuesta con TTS. "
-        "Sé breve por defecto (una o dos frases). Solo da explicaciones "
-        "largas si el usuario lo pide explícitamente. Sin markdown, "
-        "sin listas, sin bloques de código a menos que sean cortos y "
-        "necesarios. Habla en español neutro."
+        "Estás respondiendo por voz al usuario: tu respuesta de texto "
+        "se sintetiza con TTS y se reproduce. Reglas de estilo: "
+        "(1) sé breve por defecto, una o dos frases; "
+        "(2) sin markdown, sin listas, sin bloques de código a menos "
+        "que sean cortos e imprescindibles; "
+        "(3) habla en español neutro. "
+        "Importante: estas reglas son SOLO sobre cómo redactas el "
+        "mensaje final. NO te impiden usar las herramientas MCP "
+        "disponibles (control de escritorio, ventanas, apps, etc.). "
+        "Si el usuario te pide hacer algo, hazlo con las herramientas "
+        "y después confirma brevemente con voz."
     )
 
     @property

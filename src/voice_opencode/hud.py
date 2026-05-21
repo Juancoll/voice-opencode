@@ -119,7 +119,11 @@ class TurnHUD(QWidget):
         # we lose ``windowrulev2`` and end up at (0,0) with the
         # default layout. Better to be a managed window with strict
         # rules.
-        self.resize(_HUD_W, _HUD_H)
+        # setFixedSize (not just resize) so the widget can't grow as
+        # long subtitles arrive — otherwise Qt expands the QLabel and
+        # the window with it, which on a bottom-left anchor visually
+        # grows leftward off-screen.
+        self.setFixedSize(_HUD_W, _HUD_H)
 
         # --- layout ---
         root = QHBoxLayout(self)
@@ -211,9 +215,11 @@ class TurnHUD(QWidget):
 
     # -- helpers ------------------------------------------------------------
     def _elide(self, text: str) -> str:
-        # Hard cap to keep one-line subtitle from blowing up width.
-        if len(text) > 110:
-            return text[:107] + "…"
+        # Hard cap; chosen so the rendered string fits inside _HUD_W
+        # at the current subtitle font. Qt also clips via setFixedSize
+        # but eliding gives a cleaner '…' instead of a chopped char.
+        if len(text) > 90:
+            return text[:87] + "…"
         return text
 
     def _reposition(self) -> None:
