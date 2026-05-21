@@ -154,6 +154,13 @@ class OpencodeBackend:
                 timeout=(30, None),
             )
             sse.raise_for_status()
+            # Force UTF-8 — opencode emits JSON with non-ASCII chars
+            # (e.g. 'Sí', '¿'), but the response declares text/event-
+            # stream without a charset, so requests defaults to
+            # ISO-8859-1 per RFC 2616 §3.7.1. Without this override
+            # iter_lines(decode_unicode=True) returns mojibake like
+            # 'SÃ\xad' for 'Sí'.
+            sse.encoding = "utf-8"
         except Exception:
             self.abort()
             raise
