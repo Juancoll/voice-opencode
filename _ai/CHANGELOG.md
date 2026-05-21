@@ -3,6 +3,82 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-21 — Session close: housekeeping + parked work
+
+Closing this session. Recorded so a future agent doesn't redo work
+or miss debt:
+
+**Resolved during the session**
+
+* MCP tools invisible to model → root cause was ``opencode-serve``
+  process started 2026-05-19 before the ``mcp`` block existed in
+  ``~/.config/opencode/opencode.json``. Restart picked up the
+  config; ``list_windows`` / ``focus_window`` / ``capture_screen``
+  now reachable. Verified live via a standalone ``ask_stream``.
+* Per-turn monitor-layout context (see entry below) — model now
+  gets real desktop coordinates without first calling
+  ``list_monitors``.
+
+**HUD + system prompt changes that landed in the previous batch
+but were never logged here** (catching up the record):
+
+* HUD position is now configurable via ``settings.hud_corner`` ∈
+  {top-left, top-right, bottom-left, bottom-right} and
+  ``settings.hud_margin`` (default 7px = Hyprland ``gaps_out=5`` +
+  ``border_size=2``). Single helper ``_corner_xy(geo, corner,
+  margin)`` shared by ``_reposition`` and ``_apply_hyprland_rules``.
+* HUD widget uses ``setFixedSize(520, 96)`` instead of ``resize``
+  so long subtitles can't make a bottom-anchored HUD grow leftward
+  off-screen. ``_elide`` cap tightened to 90 chars.
+* ``settings.voice_system_prompt`` is injected into every voice
+  turn as the top-level ``system`` field on the POST. Default
+  prompt explicitly separates "style of FINAL text" from "tool
+  usage allowed", because style-only prompts caused the model to
+  refuse MCP calls.
+
+**Parked work (do NOT redo, ask user first)**
+
+* ``install.sh`` should restart ``opencode-serve`` when MCP /
+  opencode config changes, and a ``voice doctor`` subcommand
+  should detect a stale headless server. Mentioned in chat
+  2026-05-21, not implemented.
+* Extend ``PlatformInfo`` with kernel, distro, hyprland_version,
+  whisper_version, piper_version, locale, audio_sink (everything
+  detected once at boot). Add ``context.system_info_text()`` /
+  ``audio_info_text()`` helpers and let ``pipeline`` combine them
+  into ``extra_context`` alongside ``monitor_layout_text``. User
+  asked for an ``ExecutionContext`` formally; decision after
+  discussion was to keep the current ``platform_info()`` singleton
+  + ``settings`` pattern (no new layer) and just enrich both
+  sources. Pure additive change to ``platform/__init__.py`` and
+  ``context.py``.
+* Phase 2 TTS streaming (sentence-splitter + paplay queue) is
+  still deferred behind user confirmation of Phase 1.
+* **Multi-OS / multi-WM scope expansion** (user request, end of
+  session 2026-05-21): app must run on Windows, macOS, and several
+  Linux WMs (Hyprland ✅, KDE-Wayland, sway, GNOME-Wayland, X11).
+  Architecture was already prepared — capability-routed
+  ``platform/`` layer with ``NullBackend`` fallbacks, both stubs
+  (``macos_stub``, ``windows_stub``) already wired in ``_build``,
+  ``PLATFORM_MACOS`` / ``PLATFORM_WINDOWS`` constants live, and
+  ``detect_platform()`` returns them. **No refactor needed** — only
+  docs. Landed in this session:
+  - **ADR-0031** "Multi-OS / multi-WM scope & roadmap" (scope,
+    bring-up order per OS, the no-``sys.platform``-outside-platform/
+    rule, cross-cutting concerns per OS, alternatives rejected
+    including the ``ExecutionContext`` formal object).
+  - **`_ai/SKILLS/adding-a-backend.md`** — step-by-step recipe for
+    landing one capability on one OS without touching consumers.
+  - **`_ai/CAPABILITY_MATRIX.md`** — grid of capability × platform
+    with current status (Linux variants ✅, macOS / Windows ⛔).
+  - Stubs (``backends/macos_stub/all.py``) trimmed to minimal
+    entry-point form — implementation guidance lives in the skill,
+    not in runtime docstrings.
+  Concrete future tasks (hotkey APIs per OS, lockfile cancel on
+  Windows, install paths, CI runners) enumerated in ADR-0031;
+  none touched yet. **Do not start coding backends without reading
+  ADR-0031 + the skill.**
+
 ## 2026-05-21 — Per-turn monitor-layout context
 
 Vision turns now carry an automatic system-context block describing

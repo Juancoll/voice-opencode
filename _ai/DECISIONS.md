@@ -5,6 +5,147 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0031 — Multi-OS / multi-WM scope & roadmap
+
+Date: 2026-05-21
+
+### Context
+
+Today the app runs on Linux + Hyprland end-to-end and on a handful of
+other Linux WMs at varying fidelity (see `_ai/CAPABILITY_MATRIX.md`).
+The user has stated multiplatform (Windows, macOS, multiple Linux WMs)
+is the medium-term direction. Before we add a single new backend we
+need to be explicit about scope, order, and what counts as "done" per
+OS, because:
+
+* The platform layer (`src/voice_opencode/platform/`) is already
+  capability-routed: `_build(plat)` seeds every slot with a
+  `NullBackend` (fails loudly) and then **overwrites** the ones that
+  platform supports. Pipeline consumers never branch on OS. The
+  pattern is in place — adding a new OS is **purely additive**.
+* The constants `PLATFORM_MACOS` and `PLATFORM_WINDOWS` exist;
+  `detect_platform()` already returns them; entry-point stubs exist at
+  `backends/macos_stub/all.py` and `backends/windows_stub/all.py`.
+  Nothing in the codebase has to be refactored.
+* Hard dependencies (whisper.cpp, piper, opencode) compile on macOS
+  and Windows. Installers don't exist yet.
+* Some concerns don't fit the per-capability pattern: global hotkey
+  for push-to-talk, lockfile semantics, paths, install. Those are
+  finite and enumerated in this ADR so nobody re-discovers them.
+
+### Decision
+
+1. **Scope.** Officially supported targets, in this order:
+
+   1. Linux/Hyprland (current — keep healthy)
+   2. Linux/KDE-Wayland
+   3. Linux/sway (and other wlroots via `linux-wlroots` generic)
+   4. Linux/X11 (legacy, low priority but tests must keep passing)
+   5. macOS (Apple Silicon first; Intel best-effort)
+   6. Windows 11 (Windows 10 best-effort)
+
+   Each tier ships independently. We do **not** wait for Windows to
+   ship a KDE backend.
+
+2. **Architecture rule (the line that cannot move).** No file outside
+   the following list may contain `if sys.platform == ...` or
+   `if platform_info.platform == PLATFORM_*`:
+
+   * `platform/__init__.py` (detect + wire)
+   * `paths.py` (XDG vs Library vs %APPDATA%)
+   * `install.sh` / future per-OS installers
+   * Test files that explicitly cover OS-specific code paths.
+
+   Everything else routes through Protocols on `platform.<capability>`.
+   Adding a `sys.platform` check anywhere else is a smell: there's a
+   missing Protocol method or a missing capability constant. Fix the
+   abstraction, don't add the branch.
+
+3. **Capability bring-up order per new OS.** Smallest blast radius
+   first:
+
+   `clipboard → notify → dialog → apps → screen → wm → input
+    → audio → recorder → player → tts → stt → media → shell
+    → ocr → logview`
+
+   Each capability ships with its own test. The pipeline degrades to
+   `NullBackend` for any capability still pending — model-facing
+   tools are hidden by `mcp_server.py` based on `capabilities()`, so a
+   half-supported OS is still safe to ship.
+
+4. **Cross-cutting work per OS.** Enumerated once, not per-capability:
+
+   | Concern | macOS | Windows |
+   |---|---|---|
+   | Hotkey (F9 PTT) | `pynput` or `MASShortcut` (PyObjC); needs Accessibility permission | `RegisterHotKey` via `pywin32`, or `keyboard` if license OK |
+   | Paths | `~/Library/Application Support/voice-opencode` (state); `~/Library/Caches/voice-opencode` (runtime + lock) | `%LOCALAPPDATA%\voice-opencode` |
+   | Lockfile semantics | POSIX OK; SIGINT cancel OK | POSIX `O_CREAT\|O_EXCL` works; SIGINT does not — use named event or asyncio token |
+   | Installer | dmg or Homebrew tap | msi or scoop bucket |
+   | CI | macos-latest GitHub runner | windows-latest GitHub runner |
+
+   Each cell expands into its own follow-up task when that OS is
+   activated. Don't try to solve them all upfront.
+
+5. **Stubs stay tiny.** `backends/macos_stub/all.py` and
+   `backends/windows_stub/all.py` remain minimal entry-point shims.
+   Implementation details and roadmap belong in
+   `_ai/SKILLS/adding-a-backend.md` and `_ai/CAPABILITY_MATRIX.md`,
+   not in docstrings on runtime modules. When macOS or Windows gain
+   real backends, rename the stub package
+   (`macos_stub/` → `macos/`) and split `all.py` per capability.
+
+6. **No new top-level abstractions.** Specifically: we do **not**
+   introduce an `ExecutionContext` object passed by dependency
+   injection. The existing pair (`platform.platform_info()` singleton
+   + `settings` from `config.py`) already provides every consumer
+   with everything it needs to act on host state. Extending those two
+   covers the user's underlying requirement (per-module access to
+   centralised host info) without inventing a layer.
+
+7. **Documentation contract.** Whenever a backend lands:
+   - Tick the matrix cell in `_ai/CAPABILITY_MATRIX.md`.
+   - One-line entry in `_ai/CHANGELOG.md`.
+   - If a new system dep was added: update `_ai/STATE.md`.
+   - No update to ADR-0031 unless the rule itself changes.
+
+### Alternatives considered
+
+* **Branch on `sys.platform` inline.** Cheapest short-term, ruinous
+  long-term. The Linux experience already proves that one branch
+  becomes ten. Rejected.
+
+* **One mega-PR per OS.** Maximises review burden, blocks tier-1
+  health on tier-3 work. Rejected — capabilities ship independently.
+
+* **Drop Linux/X11 to free attention.** Tempting but X11 is the only
+  thing keeping us honest about the "no `if sys.platform`" rule (it
+  forced us to write the wlroots/x11 split correctly). Kept.
+
+* **`ExecutionContext` formal object.** Discussed with user on
+  2026-05-21. Rejected because the symptom (modules reach for host
+  info ad-hoc) is already cured by the `platform_info()` singleton —
+  adding a context object would be a layer without a job.
+
+### Consequences
+
+* Adding macOS clipboard, for example, is a five-file change:
+  `backends/macos_clipboard/pbcopy_backend.py`, an `__init__.py`,
+  three lines in `backends/macos_stub/all.py::wire`, a test, a tick in
+  the matrix. No edits to `pipeline.py`, `mcp_server.py`, `cli.py`,
+  `tray.py`, or `config.py`.
+* `mcp_server.py` already hides tools whose capability is missing, so
+  a half-supported OS exposes a smaller-but-correct toolset to the
+  model instead of a misleading one that 500s on use.
+* CI will eventually need three runners. That's deferred until at
+  least one capability lands on macOS or Windows; until then,
+  Linux-only CI catches every regression because the routing logic is
+  shared.
+* The "no branch" rule is enforceable by `rg`: a future test can grep
+  `src/voice_opencode/` for `sys.platform` outside the allowlist and
+  fail on a match. Worth adding when we get our first non-Linux PR.
+
+---
+
 ---
 
 ## ADR-0030 — Streaming LLM replies via SSE (revert ADR-0028)

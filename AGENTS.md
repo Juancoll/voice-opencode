@@ -18,6 +18,7 @@ PyQt6 system tray, optional desktop control via wtype + ydotool.
 | [`_ai/STATE.md`](./_ai/STATE.md)               | What's installed and where (host-specific)               |
 | [`_ai/RUNBOOK.md`](./_ai/RUNBOOK.md)           | How to operate / diagnose                                |
 | [`_ai/CHANGELOG.md`](./_ai/CHANGELOG.md)       | Per-session log of what was done                         |
+| [`_ai/CAPABILITY_MATRIX.md`](./_ai/CAPABILITY_MATRIX.md) | Capability × platform support grid (multi-OS roadmap)  |
 | [`_ai/SKILLS/`](./_ai/SKILLS/)                 | Recipes per recurring task (read the relevant one first) |
 
 ## Conventions

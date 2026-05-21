@@ -1,7 +1,12 @@
 """macOS backends — placeholder.
 
-Future home for AppleScript / NSWorkspace / Quartz calls.
-The ``wire(out)`` function is the entry point for the platform layer.
+Entry point for the platform layer when ``detect_platform()`` returns
+``PLATFORM_MACOS``. Currently a no-op: every capability falls through
+to the ``NullBackend`` shim from ``platform/null.py`` so the pipeline
+fails loudly ("not implemented") instead of pretending to work.
+
+To bring macOS online, follow ``_ai/SKILLS/adding-a-backend.md``.
+Multi-OS scope and the per-capability roadmap live in ADR-0031.
 """
 
 from __future__ import annotations
