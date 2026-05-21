@@ -196,13 +196,13 @@ class TurnHUD(QWidget):
         if screen is None:
             return
         geo = screen.availableGeometry()
-        x = geo.right() - _HUD_W - _MARGIN
-        y = geo.bottom() - _HUD_H - _MARGIN
+        x = geo.left() + _MARGIN
+        y = geo.top() + _MARGIN
         self.move(QPoint(x, y))
 
     def _apply_hyprland_rules(self) -> None:
         """Force Hyprland to treat the HUD as a small floating pinned
-        overlay in the bottom-right of the active monitor.
+        overlay in the top-left of the active monitor.
 
         Done at runtime via ``hyprctl dispatch`` (no edits to the
         user's ``hypr/conf.d``) because:
@@ -214,6 +214,10 @@ class TurnHUD(QWidget):
           grammar) and we don't want to silently break the user's
           config.
 
+        Top-left was chosen over bottom-right because the subtitle
+        grows horizontally as the LLM streams its reply; anchored at
+        bottom-right, a long reply spilled onto the adjacent monitor.
+
         Best-effort: if hyprctl is missing (X11, other compositor)
         or any dispatch fails we just leave the window wherever Qt
         put it. The widget is still visible, just not pinned.
@@ -221,13 +225,13 @@ class TurnHUD(QWidget):
         if not shutil.which("hyprctl"):
             return
         sel = "title:voice-opencode-hud"
-        # Compute bottom-right of the active monitor.
+        # Compute top-left of the active monitor.
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         if screen is None:
             return
         geo = screen.geometry()  # absolute pixels, includes the monitor offset
-        x = geo.right() - _HUD_W - _MARGIN + 1
-        y = geo.bottom() - _HUD_H - _MARGIN + 1
+        x = geo.left() + _MARGIN
+        y = geo.top() + _MARGIN
         for cmd in (
             ("setfloating",   sel),
             ("pin",           sel),
