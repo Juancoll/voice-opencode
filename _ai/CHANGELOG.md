@@ -3,6 +3,30 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-21 — Per-turn monitor-layout context
+
+Vision turns now carry an automatic system-context block describing
+the monitor layout (names, resolutions, desktop offsets, focus flag)
+alongside the screenshot. The model previously had no way to know
+which monitor it was looking at, the existence of other monitors, or
+real desktop coordinates — only the pixels in the attached PNG — and
+either hallucinated values or refused to act on positional requests.
+
+Implementation lives in the new ``voice_opencode.context`` module
+(``monitor_layout_text()`` with a 60s TTL cache; ``reset_cache()``
+for tests + ``config.reload()``). The text is fed into the LLM
+Protocol via a new ``extra_context: str = ""`` kwarg on
+``LLMBackend.ask`` / ``ask_stream``; the opencode adapter posts it as
+a leading ``text`` part labelled ``[Contexto del sistema]`` so the
+model reads spatial context before the user's instruction. The flag
+``settings.attach_monitor_layout`` (default ``True``) lets users
+disable the injection. The block is empty-string when monitor
+enumeration fails (null backend / no hyprctl) and the pipeline
+simply skips the part — never raises.
+
+Tests: 10 new (``test_context.py`` × 7, ``test_llm_stream.py`` × 2,
+``test_pipeline.py`` × 2). 477 total green, ruff + mypy clean.
+
 ## 2026-05-20 — Streaming LLM (ADR-0030 phase 1) + revert ADR-0028 HUD parking
 
 Added end-to-end streaming of LLM replies. The pipeline now consumes

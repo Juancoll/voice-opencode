@@ -84,6 +84,12 @@ class Settings:
     # so the HUD aligns visually with neighbouring tiled windows.
     hud_corner: str = "bottom-left"
     hud_margin: int = 7
+    # Inject a one-paragraph description of the monitor layout (names,
+    # resolutions, offsets, focus flag) into every voice turn that
+    # carries a screenshot. Lets the model position windows and click
+    # at real coordinates instead of guessing from pixels. Disable if
+    # you want to save ~150 chars per prompt or test bare behaviour.
+    attach_monitor_layout: bool = True
     # System prompt prepended to every voice turn. The default biases
     # the assistant toward short spoken answers — the reply goes
     # through Piper TTS, and long paragraphs become unbearable to
@@ -206,6 +212,12 @@ def reload() -> Settings:
 
         _llm.reset_backend_cache()
     except ImportError:  # pragma: no cover — llm module always present
+        pass
+    try:
+        from . import context as _ctx
+
+        _ctx.reset_cache()
+    except ImportError:  # pragma: no cover — context module always present
         pass
     return settings
 

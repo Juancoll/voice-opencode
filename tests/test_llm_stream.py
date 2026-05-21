@@ -157,20 +157,58 @@ def test_ask_stream_aborts_on_sse_connect_error(session_id_present):
     abort.assert_called_once()
 
 
-def test_ask_stream_aborts_on_post_failure(session_id_present):
-    """If POST fails, ask_stream still drains SSE then surfaces error."""
-    import requests as _req
-
+def test_ask_stream_prepends_extra_context_as_text_part(session_id_present):
+    """extra_context is posted as a ``text`` part BEFORE the user prompt
+    so the model reads spatial/system context first."""
     from voice_opencode.opencode_client import OpencodeBackend
     sid = session_id_present
     events = [{"type": "session.idle", "properties": {"sessionID": sid}}]
     sse_resp = _mock_sse_response(_sse_lines(events))
     b = OpencodeBackend()
+    captured: dict = {}
+
+    def _capture_post(url, json=None, timeout=None):  # noqa: A002
+        captured["payload"] = json
+        m = MagicMock()
+        m.raise_for_status.return_value = None
+        return m
+
     with patch.object(b, "ensure_session"), \
-         patch.object(b, "abort") as abort, \
          patch("voice_opencode.opencode_client.requests.get",
                return_value=sse_resp), \
          patch("voice_opencode.opencode_client.requests.post",
-               side_effect=_req.HTTPError("500")), pytest.raises(_req.HTTPError):
-        list(b.ask_stream("test"))
-    abort.assert_called_once()
+               side_effect=_capture_post):
+        list(b.ask_stream("hazlo", extra_context="Monitor layout: DP-1 ..."))
+
+    parts = captured["payload"]["parts"]
+    # Two text parts: context first, then the user instruction.
+    assert parts[0]["type"] == "text"
+    assert "[Contexto del sistema]" in parts[0]["text"]
+    assert "Monitor layout: DP-1" in parts[0]["text"]
+    assert parts[1] == {"type": "text", "text": "hazlo"}
+
+
+def test_ask_stream_omits_extra_context_when_empty(session_id_present):
+    """Empty extra_context ⇒ only the prompt part is sent (no placeholder)."""
+    from voice_opencode.opencode_client import OpencodeBackend
+    sid = session_id_present
+    events = [{"type": "session.idle", "properties": {"sessionID": sid}}]
+    sse_resp = _mock_sse_response(_sse_lines(events))
+    b = OpencodeBackend()
+    captured: dict = {}
+
+    def _capture_post(url, json=None, timeout=None):  # noqa: A002
+        captured["payload"] = json
+        m = MagicMock()
+        m.raise_for_status.return_value = None
+        return m
+
+    with patch.object(b, "ensure_session"), \
+         patch("voice_opencode.opencode_client.requests.get",
+               return_value=sse_resp), \
+         patch("voice_opencode.opencode_client.requests.post",
+               side_effect=_capture_post):
+        list(b.ask_stream("hola", extra_context=""))
+
+    parts = captured["payload"]["parts"]
+    assert parts == [{"type": "text", "text": "hola"}]

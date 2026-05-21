@@ -94,7 +94,12 @@ class OpencodeBackend:
         SESSION_FILE.write_text(sid)
         log(f"Created opencode session: {sid}")
 
-    def ask(self, prompt: str, screenshot: Path | None = None) -> str:
+    def ask(
+        self,
+        prompt: str,
+        screenshot: Path | None = None,
+        extra_context: str = "",
+    ) -> str:
         """Send a user message; return the concatenated text reply.
 
         Implemented on top of :meth:`ask_stream` so the non-streaming
@@ -102,12 +107,15 @@ class OpencodeBackend:
         screenshot, if given, is attached as a base64 data URL so we
         don't have to host a file server.
         """
-        return "".join(self.ask_stream(prompt, screenshot=screenshot)).strip()
+        return "".join(
+            self.ask_stream(prompt, screenshot=screenshot, extra_context=extra_context)
+        ).strip()
 
     def ask_stream(
         self,
         prompt: str,
         screenshot: Path | None = None,
+        extra_context: str = "",
     ) -> Iterator[str]:
         """Stream text deltas from opencode via SSE.
 
@@ -132,7 +140,17 @@ class OpencodeBackend:
         if sid is None:  # pragma: no cover — ensure_session guarantees this
             raise RuntimeError("opencode session missing after ensure_session()")
 
-        parts: list[dict] = [{"type": "text", "text": prompt}]
+        parts: list[dict] = []
+        # extra_context (e.g. monitor layout) goes *before* the user
+        # prompt so the model has the spatial / environmental context
+        # in hand by the time it reads the instruction. We label it
+        # explicitly so the model doesn't confuse it with user intent.
+        if extra_context:
+            parts.append({
+                "type": "text",
+                "text": f"[Contexto del sistema]\n{extra_context}",
+            })
+        parts.append({"type": "text", "text": prompt})
         if screenshot is not None and screenshot.exists():
             parts.append({
                 "type": "file",

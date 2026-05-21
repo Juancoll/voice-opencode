@@ -41,6 +41,8 @@ from collections.abc import Iterator
 
 from . import agent, audio, stt, tts
 from . import state as state_mod
+from .config import settings
+from .context import monitor_layout_text
 from .llm import get_backend
 from .logging import log
 from .notify import turn_end, turn_start, turn_update
@@ -339,6 +341,15 @@ def stop_and_run() -> None:
         shot = capture()
         log(f"turn: screenshot in {time.monotonic()-t_shot0:.2f}s "
             f"(shot={shot is not None})")
+        # Build per-turn context. Monitor layout is cheap and gives
+        # the model real coordinates instead of forcing it to call
+        # list_monitors or invent values from the screenshot pixels.
+        extra_ctx = ""
+        if settings.attach_monitor_layout:
+            extra_ctx = monitor_layout_text()
+            if extra_ctx:
+                log(f"turn: attaching monitor layout "
+                    f"({extra_ctx.count(chr(10))+1} lines, {len(extra_ctx)} chars)")
         backend = get_backend()
         reply_parts: list[str] = []
         last_hud_ts = 0.0
@@ -346,7 +357,7 @@ def stop_and_run() -> None:
         hud_update_count = 0
         t_llm0 = time.monotonic()
         try:
-            for delta in backend.ask_stream(text, screenshot=shot):
+            for delta in backend.ask_stream(text, screenshot=shot, extra_context=extra_ctx):
                 if not delta:
                     continue
                 reply_parts.append(delta)

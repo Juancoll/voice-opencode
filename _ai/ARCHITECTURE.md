@@ -18,6 +18,7 @@ voice-opencode/
 │   ├── desktop.py                 # shim → platform.input + platform.wm
 │   ├── opencode_client.py         # OpencodeBackend + Session shim — ADR-0029
 │   ├── llm.py                     # LLMBackend Protocol + get_backend() — ADR-0029
+│   ├── context.py                 # per-turn monitor-layout context block
 │   ├── agent.py                   # MCP agent-mode lock + audit log
 │   ├── mcp_server.py              # capability-driven MCP server (stdio)
 │   ├── pipeline.py                # orchestration: rec → stt → llm → tts

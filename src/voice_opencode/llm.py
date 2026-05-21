@@ -61,11 +61,21 @@ class LLMBackend(Protocol):
         if the backend is unreachable; the pipeline turns that into a
         user-visible HUD error."""
 
-    def ask(self, prompt: str, screenshot: Path | None = None) -> str:
+    def ask(
+        self,
+        prompt: str,
+        screenshot: Path | None = None,
+        extra_context: str = "",
+    ) -> str:
         """Send a user turn; block until the full reply is available.
 
         ``screenshot`` is best-effort — backends that don't support
         vision should silently ignore it.
+
+        ``extra_context`` is best-effort additional system-style text
+        injected alongside the prompt (e.g. monitor layout for vision
+        turns). Backends should treat it as low-priority context, not
+        as the user's instruction. Empty string ⇒ inject nothing.
 
         On HTTP/transport timeout, implementations **must** call
         ``self.abort()`` themselves before re-raising, so the
@@ -82,6 +92,7 @@ class LLMBackend(Protocol):
         self,
         prompt: str,
         screenshot: Path | None = None,
+        extra_context: str = "",
     ) -> Iterator[str]:
         """Yield text **deltas** (fragments) as the model produces them.
 
