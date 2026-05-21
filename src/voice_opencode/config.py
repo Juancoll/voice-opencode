@@ -77,6 +77,13 @@ class Settings:
     # before substring matching so search results stay precise.
     ocr_languages: tuple[str, ...] = ("spa", "eng")
     ocr_min_confidence: float = 50.0
+    # HUD placement on the active monitor. ``hud_corner`` ∈
+    # {"top-left", "top-right", "bottom-left", "bottom-right"}.
+    # ``hud_margin`` is the gap in pixels from the chosen corner.
+    # The default (7) matches Hyprland's ``gaps_out=5`` + ``border_size=2``
+    # so the HUD aligns visually with neighbouring tiled windows.
+    hud_corner: str = "bottom-left"
+    hud_margin: int = 7
 
     @property
     def opencode_url(self) -> str:

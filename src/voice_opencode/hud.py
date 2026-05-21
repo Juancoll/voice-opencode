@@ -54,6 +54,7 @@ from PyQt6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from . import paths
+from .config import settings
 from .logging import log
 
 HUD_SOCKET: Path = paths.STATE_DIR / "hud.sock"
@@ -61,16 +62,40 @@ HUD_SOCKET: Path = paths.STATE_DIR / "hud.sock"
 # Widget geometry / look.
 _HUD_W = 520
 _HUD_H = 96
-_MARGIN = 24
 _BG_COLOR = QColor(28, 28, 32, 235)
 _BORDER_RADIUS = 14
+
+
+def _corner_xy(geo, corner: str, margin: int) -> tuple[int, int]:
+    """Map a corner name + margin to absolute (x, y) for a HUD-sized
+    widget inside the rectangle ``geo``. Unknown corners fall back to
+    bottom-left (the user's default).
+
+    ``geo`` is a Qt ``QRect``-like with ``left()``, ``top()``,
+    ``right()``, ``bottom()`` returning inclusive pixel coordinates.
+    """
+    if corner == "top-left":
+        return geo.left() + margin, geo.top() + margin
+    if corner == "top-right":
+        return geo.right() - _HUD_W - margin + 1, geo.top() + margin
+    if corner == "bottom-right":
+        return (
+            geo.right() - _HUD_W - margin + 1,
+            geo.bottom() - _HUD_H - margin + 1,
+        )
+    # bottom-left and anything unknown
+    return geo.left() + margin, geo.bottom() - _HUD_H - margin + 1
 
 
 # ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
 class TurnHUD(QWidget):
-    """Bottom-right overlay used to narrate the current turn."""
+    """Floating overlay used to narrate the current turn.
+
+    Position is configurable via ``settings.hud_corner`` and
+    ``settings.hud_margin`` (see config.py).
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -196,16 +221,16 @@ class TurnHUD(QWidget):
         if screen is None:
             return
         geo = screen.availableGeometry()
-        x = geo.left() + _MARGIN
-        y = geo.top() + _MARGIN
+        x, y = _corner_xy(geo, settings.hud_corner, settings.hud_margin)
         self.move(QPoint(x, y))
 
     def _apply_hyprland_rules(self) -> None:
         """Force Hyprland to treat the HUD as a small floating pinned
-        overlay in the top-left of the active monitor.
+        overlay in the configured corner of the active monitor.
 
-        Done at runtime via ``hyprctl dispatch`` (no edits to the
-        user's ``hypr/conf.d``) because:
+        Corner + margin come from ``settings.hud_corner`` and
+        ``settings.hud_margin``. Done at runtime via ``hyprctl dispatch``
+        (no edits to the user's ``hypr/conf.d``) because:
 
         * Hyprland tiles new windows by default — without these calls
           the widget shows up at full workspace size.
@@ -214,10 +239,6 @@ class TurnHUD(QWidget):
           grammar) and we don't want to silently break the user's
           config.
 
-        Top-left was chosen over bottom-right because the subtitle
-        grows horizontally as the LLM streams its reply; anchored at
-        bottom-right, a long reply spilled onto the adjacent monitor.
-
         Best-effort: if hyprctl is missing (X11, other compositor)
         or any dispatch fails we just leave the window wherever Qt
         put it. The widget is still visible, just not pinned.
@@ -225,13 +246,12 @@ class TurnHUD(QWidget):
         if not shutil.which("hyprctl"):
             return
         sel = "title:voice-opencode-hud"
-        # Compute top-left of the active monitor.
+        # Position from settings (hud_corner + hud_margin).
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         if screen is None:
             return
-        geo = screen.geometry()  # absolute pixels, includes the monitor offset
-        x = geo.left() + _MARGIN
-        y = geo.top() + _MARGIN
+        geo = screen.availableGeometry()  # excludes reserved panels (waybar, etc.)
+        x, y = _corner_xy(geo, settings.hud_corner, settings.hud_margin)
         for cmd in (
             ("setfloating",   sel),
             ("pin",           sel),
