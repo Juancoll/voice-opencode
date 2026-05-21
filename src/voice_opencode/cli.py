@@ -13,6 +13,7 @@ Two surfaces share the same backend:
       voice config show | init | set <k> <v> | path | get <k>
       voice state                      (JSON for the tray)
       voice pause | resume
+      voice doctor [--json] [--fix]    diagnose host/server/MCP wiring
       voice desktop type "..." | key <combo> | click [btn] [x y]
                     | move <x> <y> | capture [scope] [path] | focused
 
@@ -915,6 +916,60 @@ def cmd_memory(args: list[str]) -> int:
 
 
 # ---- platform subgroup (diagnostics) ----------------------------------------
+def cmd_doctor(args: list[str]) -> int:
+    """
+    voice doctor              — run all diagnostic checks; exits 1 on any 'fail'
+    voice doctor --json       — emit results as a JSON array (machine-readable)
+    voice doctor --fix        — attempt the one supported auto-fix
+                                (restart opencode-serve when its MCP config is stale)
+    """
+    from . import doctor  # local import keeps cold-start fast
+
+    want_json = "--json" in args
+    want_fix = "--fix" in args
+
+    results = doctor.run_all()
+
+    # Apply --fix BEFORE rendering so the report reflects the new state.
+    if want_fix:
+        stale_mcp = any(
+            c.name == "opencode mcp config" and c.severity == "fail"
+            for c in results
+        )
+        if stale_mcp:
+            results.append(doctor.restart_opencode_serve())
+            # Re-probe the two checks the restart affects.
+            results.append(doctor.check_opencode_health())
+            results.append(doctor.check_opencode_mcp_config())
+
+    if want_json:
+        print(json.dumps(
+            [
+                {
+                    "name":     c.name,
+                    "severity": c.severity,
+                    "detail":   c.detail,
+                    "advice":   c.advice,
+                }
+                for c in results
+            ],
+            indent=2, ensure_ascii=False,
+        ))
+    else:
+        # Human-readable: one line per check, severity tag at the front,
+        # advice (when present) indented underneath.
+        glyph = {"ok": "[ok]  ", "warn": "[warn]", "fail": "[FAIL]"}
+        for c in results:
+            print(f"{glyph.get(c.severity, '[?]')} {c.name}: {c.detail}")
+            if c.advice and c.severity != "ok":
+                print(f"        → {c.advice}")
+
+    # Exit code: red = 1, otherwise 0. ``warn`` stays 0 on purpose so
+    # CI / pre-commit hooks can call ``voice doctor`` as a gate without
+    # tripping on optional features.
+    return 1 if any(c.severity == "fail" for c in results) else 0
+
+
 def cmd_platform(args: list[str]) -> int:
     """
     voice platform info        — active platform, host snapshot, full capability set
@@ -976,6 +1031,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "memory":     cmd_memory,
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
+    "doctor":     cmd_doctor,
 }
 
 # Legacy flat aliases — preserved for Hyprland binds and muscle memory.

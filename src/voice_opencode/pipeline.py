@@ -42,7 +42,7 @@ from collections.abc import Iterator
 from . import agent, audio, stt, tts
 from . import state as state_mod
 from .config import settings
-from .context import monitor_layout_text
+from .context import build_extra_context
 from .llm import get_backend
 from .logging import log
 from .notify import turn_end, turn_start, turn_update
@@ -341,14 +341,15 @@ def stop_and_run() -> None:
         shot = capture()
         log(f"turn: screenshot in {time.monotonic()-t_shot0:.2f}s "
             f"(shot={shot is not None})")
-        # Build per-turn context. Monitor layout is cheap and gives
-        # the model real coordinates instead of forcing it to call
-        # list_monitors or invent values from the screenshot pixels.
+        # Build per-turn context. Combines monitor layout + system
+        # info (OS, kernel, binary versions) + audio devices. Each
+        # section is cached so the cost is one subprocess fan-out at
+        # process start and zero afterwards.
         extra_ctx = ""
         if settings.attach_monitor_layout:
-            extra_ctx = monitor_layout_text()
+            extra_ctx = build_extra_context()
             if extra_ctx:
-                log(f"turn: attaching monitor layout "
+                log(f"turn: attaching context "
                     f"({extra_ctx.count(chr(10))+1} lines, {len(extra_ctx)} chars)")
         backend = get_backend()
         reply_parts: list[str] = []

@@ -493,6 +493,16 @@ OC_CFG_DIR="$HOME/.config/opencode"
 OC_CFG="$OC_CFG_DIR/opencode.json"
 mkdir -p "$OC_CFG_DIR"
 
+# Capture pre-write mtime so we can detect whether the block below
+# actually changed the file. If it did and opencode-serve is already
+# running, the server is now holding a stale config in memory — we MUST
+# restart it or every voice turn will silently lack MCP tools (the
+# 2026-05-19 / 2026-05-21 incidents).
+OC_CFG_MTIME_BEFORE=0
+if [[ -f "$OC_CFG" ]]; then
+    OC_CFG_MTIME_BEFORE=$(stat -c %Y "$OC_CFG" 2>/dev/null || echo 0)
+fi
+
 # The permission block below is REQUIRED for headless ``opencode serve``
 # mode. Without it, any MCP tool that writes outside the workspace
 # (typically capture_screen → \$XDG_RUNTIME_DIR/voice-opencode/) fires a
@@ -548,6 +558,25 @@ else
         warn "See _ai/STATE.md → opencode integration for the full block."
     else
         ok "permission allow-list present in $OC_CFG"
+    fi
+fi
+
+# If we just changed the config (mtime moved) and opencode-serve is
+# active, restart it so it actually reloads the new MCP block. Without
+# this the user gets the 2026-05-19 bug: tools declared on disk, server
+# still running with the old in-memory config, model "has no MCP tools".
+OC_CFG_MTIME_AFTER=$(stat -c %Y "$OC_CFG" 2>/dev/null || echo 0)
+if [[ "$OC_CFG_MTIME_AFTER" -gt "$OC_CFG_MTIME_BEFORE" ]]; then
+    if systemctl --user is-active --quiet opencode-serve.service 2>/dev/null; then
+        log "opencode.json changed → restarting opencode-serve to pick it up…"
+        if systemctl --user restart opencode-serve.service; then
+            ok "opencode-serve restarted."
+        else
+            warn "Failed to restart opencode-serve. Do it manually:"
+            warn "    systemctl --user restart opencode-serve"
+        fi
+    else
+        log "opencode.json updated; opencode-serve is not active yet (will pick it up on first start)."
     fi
 fi
 

@@ -3,6 +3,69 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-21 — Host snapshot, ``voice doctor``, installer auto-restart
+
+Closed three pieces of parked work from the previous session in one
+pass:
+
+**#5 PlatformInfo / HostInfo extension + unified per-turn context.**
+New module ``host_info.py`` exposes a frozen ``HostInfo`` dataclass
+(os_name, os_release, distro, arch, python_version, hyprland/whisper/
+piper/opencode versions, locale, audio sink + source, free-form
+notes) populated by a single lazy ``get()`` call. All collectors are
+fail-soft: an empty string means "unknown", they never raise. Three
+subprocesses (``hyprctl version``, ``opencode --version``,
+``piper-tts --version``) plus a parse of ``/etc/os-release`` and
+``wpctl status``. Cached for the life of the process; reset via
+``config.reload()``. ``context.py`` grew ``system_info_text()``,
+``audio_info_text()`` and ``build_extra_context()`` (joins layout +
+system + audio, skipping empty sections). Pipeline now calls
+``build_extra_context()`` instead of ``monitor_layout_text()``; the
+``attach_monitor_layout`` setting name is preserved for config.json
+backward compat even though its scope is wider now.
+
+**#4 ``voice doctor`` subcommand.** New ``doctor.py`` runs the
+checks the user would otherwise rediscover from logs:
+
+* config.json parses
+* platform backends are real (not NullBackend)
+* required binaries on PATH + version (opencode, whisper-cli,
+  piper-tts) — soft for hyprctl/wpctl/ydotool/grim/paplay/arecord
+* ``GET /global/health`` on the opencode URL
+* ``~/.config/opencode/opencode.json`` declares ``voice_desktop``,
+  and on Linux compares its mtime against the opencode-serve
+  process start (``/proc/<pid>``) to catch the 2026-05-19 incident
+  where the server holds a stale config — flags it as ``fail``
+  with advice to ``systemctl --user restart opencode-serve``
+* cached session id, if any, is still known to the server
+
+Output is human-readable by default; ``--json`` for tooling;
+``--fix`` will restart opencode-serve when the MCP staleness check
+came back red. Exit code 1 only on ``fail`` — ``warn`` keeps 0 so
+CI hooks can call it as a gate. Live run on dev host returns
+``[ok]`` for everything except whisper-cli (its ``--version`` flag
+doesn't emit text we recognise — pipeline still works).
+
+**#3 install.sh auto-restart.** The MCP-staleness bug above was
+caused by the installer happily rewriting ``opencode.json`` without
+nudging the long-running ``opencode-serve.service``. Captured the
+config mtime before the section-9 block and, if it moves and
+``systemctl --user is-active`` returns true, ``systemctl --user
+restart opencode-serve.service`` runs automatically. Idempotent
+installer reruns now keep the server in sync with the file.
+
+**Tests / quality**: 533 passing (was 499; +34 doctor); ruff +
+mypy clean across 76 source files. Live ``./voice doctor`` smoke
+test exercised every collector.
+
+**Files**: ``src/voice_opencode/host_info.py`` (new),
+``src/voice_opencode/doctor.py`` (new),
+``src/voice_opencode/context.py``,
+``src/voice_opencode/cli.py``, ``src/voice_opencode/config.py``,
+``src/voice_opencode/pipeline.py``, ``install.sh``,
+``tests/test_host_info.py`` (new), ``tests/test_doctor.py`` (new),
+``tests/test_context.py``, ``tests/test_pipeline.py``.
+
 ## 2026-05-21 — Session close: housekeeping + parked work
 
 Closing this session. Recorded so a future agent doesn't redo work

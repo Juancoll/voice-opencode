@@ -133,3 +133,112 @@ def test_reset_cache_clears_state(monkeypatch):
     context.reset_cache()
     context.monitor_layout_text()
     assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# system_info_text()
+# ---------------------------------------------------------------------------
+def test_system_info_text_renders_os_and_versions(monkeypatch):
+    from voice_opencode import host_info
+
+    fake = host_info.HostInfo(
+        os_name="Linux",
+        os_release="6.13.4-zen1",
+        distro="CachyOS",
+        arch="x86_64",
+        python_version="3.13.1",
+        hyprland_version="v0.55.2",
+        whisper_version="1.5.4",
+        piper_version="1.2.0",
+        opencode_version="0.3.2",
+        locale="es_AR.UTF-8",
+        audio_sink="",
+        audio_source="",
+    )
+    monkeypatch.setattr(host_info, "_cache", fake)
+    monkeypatch.setattr(host_info, "get", lambda *, force_refresh=False: fake)
+
+    out = context.system_info_text()
+    assert "Linux 6.13.4-zen1" in out
+    assert "CachyOS" in out
+    assert "x86_64" in out
+    assert "es_AR.UTF-8" in out
+    assert "hyprland v0.55.2" in out
+    assert "whisper.cpp 1.5.4" in out
+    assert "piper 1.2.0" in out
+
+
+def test_system_info_text_empty_when_nothing_detected(monkeypatch):
+    from voice_opencode import host_info
+
+    fake = host_info.HostInfo()  # all empty strings
+    monkeypatch.setattr(host_info, "get", lambda *, force_refresh=False: fake)
+    assert context.system_info_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# audio_info_text()
+# ---------------------------------------------------------------------------
+def test_audio_info_text_renders_both_devices(monkeypatch):
+    from voice_opencode import host_info
+
+    fake = host_info.HostInfo(audio_sink="Built-in Output", audio_source="USB Mic")
+    monkeypatch.setattr(host_info, "get", lambda *, force_refresh=False: fake)
+    out = context.audio_info_text()
+    assert "output=Built-in Output" in out
+    assert "input=USB Mic" in out
+
+
+def test_audio_info_text_empty_when_unknown(monkeypatch):
+    from voice_opencode import host_info
+
+    fake = host_info.HostInfo()
+    monkeypatch.setattr(host_info, "get", lambda *, force_refresh=False: fake)
+    assert context.audio_info_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# build_extra_context()
+# ---------------------------------------------------------------------------
+def test_build_extra_context_joins_non_empty_sections(monkeypatch):
+    """All three sections present ⇒ all three in the output."""
+    from voice_opencode import host_info
+
+    fake = host_info.HostInfo(
+        os_name="Linux",
+        python_version="3.13.1",
+        audio_sink="Built-in",
+    )
+    monkeypatch.setattr(host_info, "get", lambda *, force_refresh=False: fake)
+    monkeypatch.setattr(
+        context._platform,
+        "screen",
+        SimpleNamespace(list_monitors=lambda: [
+            SimpleNamespace(to_dict=lambda: {
+                "name": "DP-1",
+                "rect": {"x": 0, "y": 0, "w": 1920, "h": 1080},
+                "focused": True,
+            })
+        ]),
+        raising=False,
+    )
+    out = context.build_extra_context()
+    assert "Monitor layout" in out
+    assert "System: Linux" in out
+    assert "Audio: output=Built-in" in out
+    # Blank line between sections.
+    assert "\n\n" in out
+
+
+def test_build_extra_context_skips_empty_sections(monkeypatch):
+    """Empty section ⇒ no orphan header, no double blank lines."""
+    from voice_opencode import host_info
+
+    monkeypatch.setattr(host_info, "get", lambda *, force_refresh=False: host_info.HostInfo())
+    monkeypatch.setattr(
+        context._platform,
+        "screen",
+        SimpleNamespace(list_monitors=lambda: []),
+        raising=False,
+    )
+    assert context.build_extra_context() == ""

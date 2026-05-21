@@ -265,26 +265,28 @@ def test_stop_and_run_streams_partial_text_to_hud(isolated_lock):
     assert pensando_calls, f"no streaming HUD update saw 'Hola' in {upd.call_args_list}"
 
 
-def test_stop_and_run_passes_monitor_layout_when_screenshot_present(isolated_lock):
+def test_stop_and_run_passes_extra_context_when_screenshot_present(isolated_lock):
     """When a screenshot is captured AND attach_monitor_layout is on,
-    pipeline must pass the formatted layout text to ask_stream so the
-    model gets coordinates without having to call list_monitors."""
+    pipeline must pass the composed context block to ask_stream so the
+    model gets coordinates + system info without extra round trips."""
     with patch.object(pipeline.audio, "stop", return_value=MagicMock(spec=Path)), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline, "capture", return_value=Path("/tmp/shot.png")), \
-         patch.object(pipeline, "monitor_layout_text",
-                      return_value="Monitor layout: DP-1 1920x1080 @ (0,0) [FOCUSED]"), \
+         patch.object(pipeline, "build_extra_context",
+                      return_value="Monitor layout: DP-1 1920x1080 @ (0,0) [FOCUSED]\n\nSystem: Linux 6.0"), \
          patch.object(pipeline, "get_backend") as get_backend, \
          patch.object(pipeline.tts, "speak"):
         get_backend.return_value.name = "opencode"
         get_backend.return_value.ask_stream.return_value = iter(["ok"])
         pipeline.stop_and_run()
         call = get_backend.return_value.ask_stream.call_args
-        assert call.kwargs.get("extra_context", "").startswith("Monitor layout:")
+        ctx = call.kwargs.get("extra_context", "")
+        assert "Monitor layout:" in ctx
+        assert "System: Linux 6.0" in ctx
 
 
-def test_stop_and_run_skips_monitor_layout_when_disabled(isolated_lock, monkeypatch):
-    """When attach_monitor_layout=False, monitor_layout_text() must
+def test_stop_and_run_skips_extra_context_when_disabled(isolated_lock, monkeypatch):
+    """When attach_monitor_layout=False, build_extra_context() must
     not be called and extra_context stays empty."""
     from voice_opencode import config as _cfg
 
@@ -295,14 +297,14 @@ def test_stop_and_run_skips_monitor_layout_when_disabled(isolated_lock, monkeypa
     with patch.object(pipeline.audio, "stop", return_value=MagicMock(spec=Path)), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline, "capture", return_value=Path("/tmp/shot.png")), \
-         patch.object(pipeline, "monitor_layout_text",
-                      return_value="SHOULD NOT APPEAR") as mlt, \
+         patch.object(pipeline, "build_extra_context",
+                      return_value="SHOULD NOT APPEAR") as bec, \
          patch.object(pipeline, "get_backend") as get_backend, \
          patch.object(pipeline.tts, "speak"):
         get_backend.return_value.name = "opencode"
         get_backend.return_value.ask_stream.return_value = iter(["ok"])
         pipeline.stop_and_run()
-        mlt.assert_not_called()
+        bec.assert_not_called()
         call = get_backend.return_value.ask_stream.call_args
         assert call.kwargs.get("extra_context", "") == ""
 
