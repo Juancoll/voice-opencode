@@ -23,6 +23,7 @@ import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -173,9 +174,18 @@ class OpencodeBackend:
 
         def _post() -> None:
             try:
+                payload: dict[str, Any] = {"parts": parts}
+                # Inject the voice system prompt if set. opencode
+                # accepts a top-level ``system`` field that's
+                # prepended for this turn. We send it on every
+                # request (cheap) so the user can edit it in
+                # config.json + ``voice reset`` without restarts.
+                sys_prompt = settings.voice_system_prompt
+                if sys_prompt:
+                    payload["system"] = sys_prompt
                 r = requests.post(
                     f"{settings.opencode_url}/session/{sid}/message",
-                    json={"parts": parts},
+                    json=payload,
                     timeout=180,
                 )
                 r.raise_for_status()

@@ -84,6 +84,18 @@ class Settings:
     # so the HUD aligns visually with neighbouring tiled windows.
     hud_corner: str = "bottom-left"
     hud_margin: int = 7
+    # System prompt prepended to every voice turn. The default biases
+    # the assistant toward short spoken answers — the reply goes
+    # through Piper TTS, and long paragraphs become unbearable to
+    # listen to. Override in config.json to taste; set to empty
+    # string to disable.
+    voice_system_prompt: str = (
+        "Estás respondiendo por voz: sintetizar tu respuesta con TTS. "
+        "Sé breve por defecto (una o dos frases). Solo da explicaciones "
+        "largas si el usuario lo pide explícitamente. Sin markdown, "
+        "sin listas, sin bloques de código a menos que sean cortos y "
+        "necesarios. Habla en español neutro."
+    )
 
     @property
     def opencode_url(self) -> str:
