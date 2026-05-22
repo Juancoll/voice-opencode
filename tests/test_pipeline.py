@@ -603,3 +603,96 @@ def test_toggle_dictation_when_idle_starts(isolated_lock):
         pipeline.toggle_dictation()
         start_dict.assert_called_once()
         stop_dict.assert_not_called()
+
+
+def test_start_dictation_captures_focused_window_id(isolated_lock, tmp_path, monkeypatch):
+    focus_file = tmp_path / "dictation.focus"
+    monkeypatch.setattr(pipeline, "DICTATION_FOCUS_FILE", focus_file)
+    fake_win = MagicMock(id="0xdead")
+    with patch.object(pipeline.agent, "is_blocking", return_value=False), \
+         patch.object(pipeline.audio, "is_recording", return_value=False), \
+         patch.object(pipeline.audio, "start"), \
+         patch.object(pipeline._plat.wm, "active_window", return_value=fake_win):
+        pipeline.start_dictation()
+    assert focus_file.read_text() == "0xdead"
+
+
+def test_start_dictation_clears_focus_file_when_no_active_window(
+    isolated_lock, tmp_path, monkeypatch,
+):
+    focus_file = tmp_path / "dictation.focus"
+    focus_file.write_text("stale")
+    monkeypatch.setattr(pipeline, "DICTATION_FOCUS_FILE", focus_file)
+    with patch.object(pipeline.agent, "is_blocking", return_value=False), \
+         patch.object(pipeline.audio, "is_recording", return_value=False), \
+         patch.object(pipeline.audio, "start"), \
+         patch.object(pipeline._plat.wm, "active_window", return_value=None):
+        pipeline.start_dictation()
+    assert not focus_file.exists()
+
+
+def test_stop_dictation_restores_focus_before_inject(
+    isolated_lock, tmp_path, monkeypatch,
+):
+    focus_file = tmp_path / "dictation.focus"
+    focus_file.write_text("0xbeef")
+    monkeypatch.setattr(pipeline, "DICTATION_FOCUS_FILE", focus_file)
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "type"})(),
+        raising=False,
+    )
+    call_order: list[str] = []
+    focus_mock = MagicMock(side_effect=lambda _: call_order.append("focus"))
+    type_mock = MagicMock(side_effect=lambda _: call_order.append("type"))
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline._plat.wm, "focus_window", focus_mock), \
+         patch.object(pipeline.desktop, "type_text", type_mock):
+        pipeline.stop_dictation_and_inject()
+    assert call_order == ["focus", "type"]
+    focus_mock.assert_called_once_with("0xbeef")
+    # File consumed.
+    assert not focus_file.exists()
+
+
+def test_stop_dictation_handles_missing_focus_file(
+    isolated_lock, tmp_path, monkeypatch,
+):
+    focus_file = tmp_path / "dictation.focus"  # never created
+    monkeypatch.setattr(pipeline, "DICTATION_FOCUS_FILE", focus_file)
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "type"})(),
+        raising=False,
+    )
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline._plat.wm, "focus_window") as focus_mock, \
+         patch.object(pipeline.desktop, "type_text") as type_mock:
+        pipeline.stop_dictation_and_inject()
+    # No focus call (no id to restore), but inject still happens.
+    focus_mock.assert_not_called()
+    type_mock.assert_called_once_with("hola")
+
+
+def test_stop_dictation_inject_still_runs_when_focus_restore_fails(
+    isolated_lock, tmp_path, monkeypatch,
+):
+    focus_file = tmp_path / "dictation.focus"
+    focus_file.write_text("0xbeef")
+    monkeypatch.setattr(pipeline, "DICTATION_FOCUS_FILE", focus_file)
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "type"})(),
+        raising=False,
+    )
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline._plat.wm, "focus_window",
+                      side_effect=RuntimeError("no such window")), \
+         patch.object(pipeline.desktop, "type_text") as type_mock:
+        pipeline.stop_dictation_and_inject()
+    type_mock.assert_called_once_with("hola")
+    # Even on failure the file is consumed (avoid retrying on a stale id).
+    assert not focus_file.exists()

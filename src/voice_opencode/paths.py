@@ -122,6 +122,7 @@ AGENT_LOG_FILE: Path = PROJECT_ROOT / "logs" / "agent.log"
 # fcntl.flock() this file instead (Windows: msvcrt.locking, Phase C).
 # Kernel releases on process death either way.
 PIPELINE_LOCK_FILE: Path = STATE_DIR / "pipeline.lock"
+DICTATION_FOCUS_FILE: Path = STATE_DIR / "dictation.focus"
 
 
 def ensure_dirs() -> None:

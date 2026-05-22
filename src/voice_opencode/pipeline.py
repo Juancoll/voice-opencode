@@ -47,7 +47,7 @@ from .context import build_extra_context
 from .llm import get_backend
 from .logging import log
 from .notify import turn_end, turn_start, turn_update
-from .paths import PIPELINE_LOCK_FILE, ensure_dirs
+from .paths import DICTATION_FOCUS_FILE, PIPELINE_LOCK_FILE, ensure_dirs
 from .screenshot import capture
 from .state import set_state
 
@@ -467,6 +467,26 @@ def start_dictation() -> None:
         if not acquired:
             log("Ctrl+F9 descartado: ya hay un turno en curso.")
             return
+        # Capture the focused window BEFORE we show the HUD so we can
+        # restore focus before injecting. PyQt's WA_ShowWithoutActivating
+        # + WindowDoesNotAcceptFocus flags only work reliably if the
+        # user's Hyprland config also has a ``noinitialfocus`` window
+        # rule for the HUD. Persisting the focus target across the two
+        # processes (press + release run as separate ``voice`` invocations)
+        # via a file in STATE_DIR makes the flow robust regardless of
+        # whether those rules exist.
+        try:
+            w = _plat.wm.active_window()
+            if w is not None and getattr(w, "id", None):
+                DICTATION_FOCUS_FILE.write_text(str(w.id))
+                log(f"dictation: captured focused window id={w.id!r}")
+            else:
+                DICTATION_FOCUS_FILE.unlink(missing_ok=True)
+                log("dictation: no focused window to remember.")
+        except Exception as e:
+            log(f"dictation: failed to capture focus ({e}); will skip restore.")
+            DICTATION_FOCUS_FILE.unlink(missing_ok=True)
+
         audio.start()
         set_state("recording")
         turn_start("✍️ Dictando…", "Suelta Ctrl+F9 para insertar")
@@ -524,6 +544,7 @@ def stop_dictation_and_inject() -> None:
 
         method = (settings.dictation_inject_method or "type").lower()
         try:
+            _restore_dictation_focus()
             _inject_text(text, method)
         except Exception as e:
             log(f"dictation inject error ({method}): {e}")
@@ -545,6 +566,43 @@ def toggle_dictation() -> None:
         stop_dictation_and_inject()
     else:
         start_dictation()
+
+
+def _restore_dictation_focus() -> None:
+    """Re-focus the window that was active when dictation started.
+
+    Reads the id persisted by ``start_dictation`` and asks the WM to
+    focus it. Sleeps briefly so the compositor has time to register
+    the focus change before we type into it — without the sleep,
+    ydotool fires while the HUD still owns focus and the text vanishes.
+
+    Failure is non-fatal: if the file is missing, the id is stale, or
+    the WM call raises, we just log and let the inject fire on whatever
+    window currently has focus (worst case: same as before the fix).
+    """
+    try:
+        wid = DICTATION_FOCUS_FILE.read_text().strip()
+    except FileNotFoundError:
+        log("dictation: no focus file; injecting on current window.")
+        return
+    except Exception as e:
+        log(f"dictation: focus file unreadable ({e}); injecting on current window.")
+        return
+    if not wid:
+        log("dictation: focus file empty; injecting on current window.")
+        return
+    try:
+        _plat.wm.focus_window(wid)
+        # 80ms — empirically enough on Hyprland for the focus change
+        # to land before ydotool's first key event. Imperceptible to
+        # the user.
+        time.sleep(0.08)
+        log(f"dictation: restored focus to {wid!r}.")
+    except Exception as e:
+        log(f"dictation: focus_window({wid!r}) failed ({e}); "
+            "injecting on current window.")
+    finally:
+        DICTATION_FOCUS_FILE.unlink(missing_ok=True)
 
 
 def _inject_text(text: str, method: str) -> None:
