@@ -295,6 +295,21 @@ def stop_and_run() -> None:
             _cancel_active_turn(holder_pid)
             return
 
+    # If the current recording was started by start_dictation (Ctrl+F9),
+    # a plain F9 release must NOT route the audio to the LLM — that
+    # would silently turn the user's dictation into an assistant
+    # query. The DICTATION_FOCUS_FILE sentinel is written exclusively
+    # by start_dictation; presence here means "we were dictating".
+    # Delegate to the dictation stop so the text lands at the cursor
+    # as intended. Symmetric guard in stop_dictation_and_inject is not
+    # needed (Ctrl+F9 release without a prior dictation start hits the
+    # lock-free branch in there and exits clean).
+    if DICTATION_FOCUS_FILE.exists() and audio.is_recording():
+        log("stop_and_run: dictation in progress, delegating to "
+            "stop_dictation_and_inject.")
+        stop_dictation_and_inject()
+        return
+
     with _pipeline_lock("stop_and_run") as acquired:
         if not acquired:
             return
