@@ -579,7 +579,12 @@ def test_stop_dictation_handles_stt_failure(isolated_lock):
     pipeline.set_state.assert_any_call("error")
 
 
-def test_stop_dictation_handles_inject_failure(isolated_lock):
+def test_stop_dictation_handles_inject_failure(isolated_lock, monkeypatch):
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "type"})(),
+        raising=False,
+    )
     with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline.desktop, "type_text", side_effect=RuntimeError("no ydotool")):

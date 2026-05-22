@@ -542,7 +542,7 @@ def stop_dictation_and_inject() -> None:
             turn_end()
             return
 
-        method = (settings.dictation_inject_method or "type").lower()
+        method = (settings.dictation_inject_method or "paste").lower()
         try:
             _restore_dictation_focus()
             _inject_text(text, method)
@@ -608,19 +608,22 @@ def _restore_dictation_focus() -> None:
 def _inject_text(text: str, method: str) -> None:
     """Dispatch text injection to the chosen backend.
 
-    ``paste`` requires both a clipboard backend that can write and an
-    input backend that can send ``ctrl+v``. If clipboard write fails,
-    we fall back to ``type`` rather than crashing the turn — the user
-    cares about getting their text in, not about which mechanism we
-    used.
+    Default is ``paste`` (see config.py): clipboard write + ``ctrl+v``.
+    Falls back to ``type`` only when the clipboard write raises so a
+    missing wl-copy never blocks a turn. Users who explicitly want
+    keystroke injection set ``dictation_inject_method="type"`` —
+    accept that ydotool throughput caps around 60 chars/s and long
+    inputs may lose characters.
     """
-    if method == "paste":
-        try:
-            _plat.clipboard.write(text)
-            desktop.press_key("ctrl+v")
-            return
-        except Exception as e:
-            log(f"dictation: paste failed ({e}); falling back to type.")
-            # Fall through to type below.
-    desktop.type_text(text)
+    if method == "type":
+        desktop.type_text(text)
+        return
+    # paste (default and any other value)
+    try:
+        _plat.clipboard.write(text)
+        desktop.press_key("ctrl+v")
+        return
+    except Exception as e:
+        log(f"dictation: paste failed ({e}); falling back to type.")
+        desktop.type_text(text)
 

@@ -114,14 +114,18 @@ class Settings:
     # Dictation mode (Ctrl+F9 by default): the recording is transcribed
     # by whisper and injected at the cursor without going through the
     # LLM, TTS or opencode session. Two injection strategies:
+    #   "paste" — write to the clipboard then send ctrl+v. Instant for
+    #             any length but clobbers the clipboard. DEFAULT because
+    #             ``type`` drops characters on long inputs (ydotool
+    #             throughput is ~60 chars/s and the receiving app may
+    #             miss events under load) — see 2026-05-21 incident
+    #             where a 1180-char transcript took 20s and lost
+    #             characters mid-way.
     #   "type"  — synthesise key events via the input backend
     #             (ydotool/wtype on Linux). Survives clipboard contents
-    #             but is slower (~10–20 chars/s) and may drop accents
-    #             on misconfigured layouts.
-    #   "paste" — write to the clipboard then send ctrl+v. Instant for
-    #             long texts but clobbers whatever was on the clipboard.
-    # Anything else is treated as "type".
-    dictation_inject_method: str = "type"
+    #             but is slow and unreliable for long texts.
+    # Anything else is treated as "paste".
+    dictation_inject_method: str = "paste"
 
     @property
     def opencode_url(self) -> str:
