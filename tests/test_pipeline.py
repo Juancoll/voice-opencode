@@ -468,3 +468,138 @@ def test_toggle_when_idle_calls_start_recording(isolated_lock):
         pipeline.toggle()
         start_rec.assert_called_once()
         stop_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Dictation flow (Ctrl+F9 by default): record → STT → inject. No LLM, no TTS.
+# ---------------------------------------------------------------------------
+def test_start_dictation_acquires_lock_and_starts_audio(isolated_lock):
+    with patch.object(pipeline.agent, "is_blocking", return_value=False), \
+         patch.object(pipeline.audio, "is_recording", return_value=False), \
+         patch.object(pipeline.audio, "start") as a_start:
+        pipeline.start_dictation()
+        a_start.assert_called_once()
+    pipeline.set_state.assert_any_call("recording")
+    pipeline.turn_start.assert_called_once()
+
+
+def test_start_dictation_dropped_when_paused(isolated_lock):
+    with patch.object(pipeline.agent, "is_blocking", return_value=True), \
+         patch.object(pipeline.agent, "is_active", return_value=False), \
+         patch.object(pipeline.audio, "start") as a_start:
+        pipeline.start_dictation()
+        a_start.assert_not_called()
+
+
+def test_start_dictation_dropped_when_already_recording(isolated_lock):
+    with patch.object(pipeline.agent, "is_blocking", return_value=False), \
+         patch.object(pipeline.audio, "is_recording", return_value=True), \
+         patch.object(pipeline.audio, "start") as a_start:
+        pipeline.start_dictation()
+        a_start.assert_not_called()
+
+
+def test_stop_dictation_injects_via_type_by_default(isolated_lock, monkeypatch):
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "type"})(),
+        raising=False,
+    )
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola mundo"), \
+         patch.object(pipeline.desktop, "type_text") as type_text, \
+         patch.object(pipeline.desktop, "press_key") as press_key:
+        pipeline.stop_dictation_and_inject()
+    type_text.assert_called_once_with("hola mundo")
+    press_key.assert_not_called()
+    pipeline.set_state.assert_any_call("idle")
+
+
+def test_stop_dictation_injects_via_paste_when_configured(isolated_lock, monkeypatch):
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "paste"})(),
+        raising=False,
+    )
+    cb = MagicMock()
+    monkeypatch.setattr(pipeline._plat, "clipboard", cb, raising=False)
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline.desktop, "type_text") as type_text, \
+         patch.object(pipeline.desktop, "press_key") as press_key:
+        pipeline.stop_dictation_and_inject()
+    cb.write.assert_called_once_with("hola")
+    press_key.assert_called_once_with("ctrl+v")
+    type_text.assert_not_called()
+
+
+def test_stop_dictation_paste_falls_back_to_type_on_clipboard_failure(
+    isolated_lock, monkeypatch,
+):
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "paste"})(),
+        raising=False,
+    )
+    cb = MagicMock()
+    cb.write.side_effect = RuntimeError("no clipboard backend")
+    monkeypatch.setattr(pipeline._plat, "clipboard", cb, raising=False)
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline.desktop, "type_text") as type_text:
+        pipeline.stop_dictation_and_inject()
+    type_text.assert_called_once_with("hola")
+
+
+def test_stop_dictation_handles_no_audio(isolated_lock):
+    with patch.object(pipeline.audio, "stop", return_value=None), \
+         patch.object(pipeline.stt, "transcribe") as transcribe, \
+         patch.object(pipeline.desktop, "type_text") as type_text:
+        pipeline.stop_dictation_and_inject()
+    transcribe.assert_not_called()
+    type_text.assert_not_called()
+    pipeline.set_state.assert_any_call("idle")
+
+
+def test_stop_dictation_handles_empty_transcript(isolated_lock):
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value=""), \
+         patch.object(pipeline.desktop, "type_text") as type_text:
+        pipeline.stop_dictation_and_inject()
+    type_text.assert_not_called()
+    pipeline.set_state.assert_any_call("idle")
+
+
+def test_stop_dictation_handles_stt_failure(isolated_lock):
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", side_effect=RuntimeError("boom")), \
+         patch.object(pipeline.desktop, "type_text") as type_text:
+        pipeline.stop_dictation_and_inject()
+    type_text.assert_not_called()
+    pipeline.set_state.assert_any_call("error")
+
+
+def test_stop_dictation_handles_inject_failure(isolated_lock):
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline.desktop, "type_text", side_effect=RuntimeError("no ydotool")):
+        pipeline.stop_dictation_and_inject()
+    pipeline.set_state.assert_any_call("error")
+
+
+def test_toggle_dictation_when_recording_stops(isolated_lock):
+    with patch.object(pipeline.audio, "is_recording", return_value=True), \
+         patch.object(pipeline, "stop_dictation_and_inject") as stop_dict, \
+         patch.object(pipeline, "start_dictation") as start_dict:
+        pipeline.toggle_dictation()
+        stop_dict.assert_called_once()
+        start_dict.assert_not_called()
+
+
+def test_toggle_dictation_when_idle_starts(isolated_lock):
+    with patch.object(pipeline.audio, "is_recording", return_value=False), \
+         patch.object(pipeline, "stop_dictation_and_inject") as stop_dict, \
+         patch.object(pipeline, "start_dictation") as start_dict:
+        pipeline.toggle_dictation()
+        start_dict.assert_called_once()
+        stop_dict.assert_not_called()

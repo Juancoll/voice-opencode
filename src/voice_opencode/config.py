@@ -111,6 +111,17 @@ class Settings:
         "Si el usuario te pide hacer algo, hazlo con las herramientas "
         "y después confirma brevemente con voz."
     )
+    # Dictation mode (Ctrl+F9 by default): the recording is transcribed
+    # by whisper and injected at the cursor without going through the
+    # LLM, TTS or opencode session. Two injection strategies:
+    #   "type"  — synthesise key events via the input backend
+    #             (ydotool/wtype on Linux). Survives clipboard contents
+    #             but is slower (~10–20 chars/s) and may drop accents
+    #             on misconfigured layouts.
+    #   "paste" — write to the clipboard then send ctrl+v. Instant for
+    #             long texts but clobbers whatever was on the clipboard.
+    # Anything else is treated as "type".
+    dictation_inject_method: str = "type"
 
     @property
     def opencode_url(self) -> str:

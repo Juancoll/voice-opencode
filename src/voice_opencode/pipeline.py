@@ -39,7 +39,8 @@ import subprocess
 import time
 from collections.abc import Iterator
 
-from . import agent, audio, stt, tts
+from . import agent, audio, desktop, stt, tts
+from . import platform as _plat
 from . import state as state_mod
 from .config import settings
 from .context import build_extra_context
@@ -423,4 +424,145 @@ def toggle() -> None:
         stop_and_run()
     else:
         start_recording()
+
+
+# ---------------------------------------------------------------------------
+# Dictation flow (Ctrl+F9 by default)
+#
+# A second, simpler pipeline that shares the recorder + STT with the
+# assistant flow but DOES NOT touch the LLM, the opencode session, or
+# the TTS. The transcribed text is injected at the cursor of whatever
+# window is focused at stop time. Use case: filling forms, writing chat
+# messages, code comments — anything where you want speech-to-text
+# without an assistant turn in the middle.
+#
+# Locking strategy: dictation uses the SAME ``PIPELINE_LOCK_FILE`` as
+# the assistant flow on purpose. The two can't run concurrently — they
+# both need the microphone — and reusing the lock means F9-during-
+# dictation behaves like the existing "busy" path (silently dropped)
+# instead of stepping on each other's audio device.
+#
+# Cancel semantics: there is no mid-turn cancel. Dictation phases are
+# short (record + transcribe + inject, never more than a few seconds
+# after the user releases the key) and the inject step is atomic from
+# the user's point of view. If a release races with a still-running
+# transcription, the in-flight one finishes; the new "release" is
+# dropped by the lock.
+# ---------------------------------------------------------------------------
+def start_dictation() -> None:
+    """Begin a dictation recording. Mirror of ``start_recording`` but
+    with a distinct HUD label so the user knows no LLM is in play.
+
+    The state machine reuses ``recording`` — the tray only cares about
+    "mic is hot", not which flow owns it.
+    """
+    if agent.is_blocking():
+        why = "agent activo" if agent.is_active() else "en pausa"
+        log(f"Blocked — ignoring dictation start ({why}).")
+        return
+    if audio.is_recording():
+        log("Ctrl+F9 descartado: ya hay un turno en curso.")
+        return
+    with _pipeline_lock("start_dictation") as acquired:
+        if not acquired:
+            log("Ctrl+F9 descartado: ya hay un turno en curso.")
+            return
+        audio.start()
+        set_state("recording")
+        turn_start("✍️ Dictando…", "Suelta Ctrl+F9 para insertar")
+
+
+def stop_dictation_and_inject() -> None:
+    """Stop the dictation recording, transcribe with whisper, inject
+    the text at the focused window's cursor. No LLM, no TTS, no
+    session bump.
+
+    Injection method is governed by ``settings.dictation_inject_method``:
+
+    * ``"paste"``  — write to the clipboard, send ``ctrl+v``. Fast,
+                     clobbers the clipboard.
+    * everything else (default ``"type"``) — synthesise key events.
+                     Slower but preserves clipboard contents.
+
+    The state always ends on ``idle`` or ``error``. The HUD shows the
+    first ~80 chars of what we injected, so the user can verify before
+    it auto-closes.
+    """
+    with _pipeline_lock("stop_dictation_and_inject") as acquired:
+        if not acquired:
+            return
+
+        t0 = time.monotonic()
+        log("=== turn start: stop_dictation_and_inject ===")
+        wav = audio.stop()
+        if wav is None:
+            log(f"dictation: no audio (t={time.monotonic()-t0:.2f}s)")
+            set_state("idle")
+            turn_update("🤷 Sin audio", "")
+            turn_end()
+            return
+
+        set_state("thinking")
+        turn_update("✍️ Transcribiendo…", "")
+
+        t_stt0 = time.monotonic()
+        try:
+            text = stt.transcribe(wav)
+        except Exception as e:
+            log(f"dictation STT error: {e}")
+            set_state("error")
+            turn_update("❌ Error STT", str(e)[:120])
+            turn_end()
+            return
+        log(f"dictation: STT done in {time.monotonic()-t_stt0:.2f}s "
+            f"-> {text!r}")
+        if not text:
+            set_state("idle")
+            turn_update("🤷 Nada que transcribir", "")
+            turn_end()
+            return
+
+        method = (settings.dictation_inject_method or "type").lower()
+        try:
+            _inject_text(text, method)
+        except Exception as e:
+            log(f"dictation inject error ({method}): {e}")
+            set_state("error")
+            turn_update("❌ Error inyección", str(e)[:120])
+            turn_end()
+            return
+
+        log(f"dictation: injected via {method} "
+            f"(t_total={time.monotonic()-t0:.2f}s, len={len(text)})")
+        set_state("idle")
+        turn_update("✅ Insertado", text[:80])
+        turn_end()
+
+
+def toggle_dictation() -> None:
+    """Single-binding helper symmetric to ``toggle()``."""
+    if audio.is_recording():
+        stop_dictation_and_inject()
+    else:
+        start_dictation()
+
+
+def _inject_text(text: str, method: str) -> None:
+    """Dispatch text injection to the chosen backend.
+
+    ``paste`` requires both a clipboard backend that can write and an
+    input backend that can send ``ctrl+v``. If clipboard write fails,
+    we fall back to ``type`` rather than crashing the turn — the user
+    cares about getting their text in, not about which mechanism we
+    used.
+    """
+    if method == "paste":
+        try:
+            _plat.clipboard.write(text)
+            desktop.press_key("ctrl+v")
+            return
+        except Exception as e:
+            log(f"dictation: paste failed ({e}); falling back to type.")
+            # Fall through to type below.
+    desktop.type_text(text)
 

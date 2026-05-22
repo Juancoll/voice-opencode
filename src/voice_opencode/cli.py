@@ -6,6 +6,7 @@ Two surfaces share the same backend:
 * **New grouped CLI** — what we recommend going forward::
 
       voice rec start | stop | toggle | status
+      voice dictate start | stop | toggle
       voice tray
       voice session reset | status
       voice tts say "hola" | voices
@@ -79,6 +80,33 @@ def cmd_rec(args: list[str]) -> int:
         print("recording:", audio.is_recording())
     else:
         _eprint(f"Unknown: rec {sub}")
+        return 1
+    return 0
+
+
+def cmd_dictate(args: list[str]) -> int:
+    """
+    voice dictate start | stop | toggle
+
+    Dictation mode: record → whisper → inject text at the cursor.
+    Skips the LLM, TTS, and opencode session — just speech-to-text
+    straight into whatever window is focused when you stop.
+
+    Injection method is controlled by ``dictation_inject_method`` in
+    config.json (``type`` default, or ``paste``).
+    """
+    if not args:
+        _eprint("Usage: voice dictate [start|stop|toggle]")
+        return 1
+    sub = args[0]
+    if sub == "start":
+        pipeline.start_dictation()
+    elif sub == "stop":
+        pipeline.stop_dictation_and_inject()
+    elif sub == "toggle":
+        pipeline.toggle_dictation()
+    else:
+        _eprint(f"Unknown: dictate {sub}")
         return 1
     return 0
 
@@ -1032,6 +1060,7 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "platform":   cmd_platform,
     "mcp":        cmd_mcp,
     "doctor":     cmd_doctor,
+    "dictate":    cmd_dictate,
 }
 
 # Legacy flat aliases — preserved for Hyprland binds and muscle memory.

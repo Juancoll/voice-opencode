@@ -3,6 +3,43 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-21 — Dictation mode (Ctrl+F9)
+
+Added a second pipeline flow that reuses the recorder + STT but skips
+the LLM, TTS and opencode session entirely. Push-to-talk on
+``CTRL+F9`` (press = ``voice dictate start``, release = ``voice
+dictate stop``); the recording is transcribed with whisper and the
+text is injected at the cursor of whatever window is focused on
+release. Use case: filling forms, writing chat messages, code
+comments — no assistant turn in the middle.
+
+Architecture: ``pipeline.start_dictation()`` /
+``pipeline.stop_dictation_and_inject()`` / ``pipeline.toggle_dictation()``
+share the same cross-process ``PIPELINE_LOCK_FILE`` as the assistant
+flow (only one mic-using flow at a time). New setting
+``dictation_inject_method: type | paste`` (default ``type``):
+
+* ``type``  — synthesise key events via ``desktop.type_text`` (ydotool
+              on Linux). Preserves clipboard, ~10–20 chars/s.
+* ``paste`` — write to clipboard, send ``ctrl+v``. Instant but
+              clobbers clipboard. Falls back to ``type`` if the
+              clipboard backend write raises, so a missing wl-copy
+              never breaks a turn.
+
+CLI: ``voice dictate start | stop | toggle``. No legacy aliases —
+the dispatcher is short enough for Hyprland binds. ``install.sh``
+adds the two ``CTRL, F9`` binds to a freshly-created
+``conf.d/voice.conf`` and prints a copy-paste hint for users whose
+file already exists (since the installer never overwrites it). The
+HUD shows ``✍️ Dictando…`` / ``✍️ Transcribiendo…`` / ``✅ Insertado``
+so the flow is visually distinguishable from the assistant turn.
+
+Tests: 545 (+12), ruff + mypy clean.
+
+Files: ``src/voice_opencode/pipeline.py`` (3 new functions + helper),
+``src/voice_opencode/config.py`` (setting), ``src/voice_opencode/cli.py``
+(``cmd_dictate``), ``install.sh``, ``tests/test_pipeline.py``.
+
 ## 2026-05-21 — Host snapshot, ``voice doctor``, installer auto-restart
 
 Closed three pieces of parked work from the previous session in one

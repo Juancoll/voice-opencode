@@ -456,11 +456,19 @@ bind  = , F9, exec, $ROOT/voice start
 bindr = , F9, exec, $ROOT/voice stop
 # Forget current opencode session
 bind  = SUPER, F9, exec, $ROOT/voice reset
+# Dictation: speech-to-text injected at the cursor (no LLM / no TTS)
+bind  = CTRL, F9, exec, $ROOT/voice dictate start
+bindr = CTRL, F9, exec, $ROOT/voice dictate stop
 EOF
         ok "Created $HYPR_VOICE"
         warn "Make sure your hyprland.conf sources conf.d/*.conf"
     else
         ok "$HYPR_VOICE already exists."
+        if ! grep -q "voice dictate" "$HYPR_VOICE"; then
+            warn "Dictation binds not present. Add manually to $HYPR_VOICE:"
+            warn "    bind  = CTRL, F9, exec, $ROOT/voice dictate start"
+            warn "    bindr = CTRL, F9, exec, $ROOT/voice dictate stop"
+        fi
     fi
 
     ensure_line "$HYPR_AUTO" "exec-once = $ROOT/voice tray"
