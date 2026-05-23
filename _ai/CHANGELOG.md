@@ -3,6 +3,38 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-22 — Dictation key watchdog (evdev EVIOCGKEY)
+
+Belt-and-suspenders on top of ``arecord -d 120``: a detached child
+process polls the kernel directly via ``ioctl(EVIOCGKEY)`` on
+``/dev/input/event*`` keyboard nodes and triggers ``voice dictate
+stop`` as soon as the configured key (default ``F9``) transitions
+from pressed → released. This way a missed key-up event from
+Hyprland — suspend, modifier released before the main key,
+compositor hiccup — gets cleaned up within ``dictation_watchdog_poll_ms``
+(default 200 ms) instead of waiting for the 2-min arecord cap.
+
+Implementation notes:
+
+* New module ``voice_opencode.dictation_watchdog`` — no ``python-evdev``
+  dependency; we build the ``EVIOCGKEY`` ioctl number by hand and
+  ship a minimal keycode map (F1–F24, PAUSE, etc.). Adding more
+  keys is a one-line edit.
+* ``spawn()`` ``os.fork()`` s a detached child, drops tty/stdio,
+  writes pid to ``STATE_DIR/dictation.watchdog.pid``. ``stop()``
+  is idempotent — survives missing file, dead PID and garbage pid.
+* Best-effort: if no ``/dev/input/event*`` is openable (no ``input``
+  group membership, headless test runner) the child logs and exits
+  with code 1; ``-d 120`` remains the safety net.
+* Two new config keys: ``dictation_watchdog_key`` ("" disables) and
+  ``dictation_watchdog_poll_ms``.
+* ``start_dictation()`` spawns the watchdog after ``audio.start()``;
+  ``stop_dictation_and_inject()`` reaps it before doing anything
+  else so a real key-up doesn't race a watchdog-triggered stop.
+* 15 new tests with ``/dev/input`` fully mocked; ``isolated_lock``
+  fixture mutes ``spawn``/``stop`` so existing pipeline tests don't
+  start poking real kernel devices. 567 tests green, ruff + mypy clean.
+
 ## 2026-05-22 — Recorder watchdog + paste timing fixes
 
 After a real-world incident where a Ctrl+F9 press never received its

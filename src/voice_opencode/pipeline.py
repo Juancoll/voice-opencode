@@ -39,7 +39,7 @@ import subprocess
 import time
 from collections.abc import Iterator
 
-from . import agent, audio, desktop, stt, tts
+from . import agent, audio, desktop, dictation_watchdog, stt, tts
 from . import platform as _plat
 from . import state as state_mod
 from .config import settings
@@ -506,6 +506,20 @@ def start_dictation() -> None:
         set_state("recording")
         turn_start("✍️ Dictando…", "Suelta Ctrl+F9 para insertar")
 
+        # Out-of-process key watchdog: if the Hyprland release event
+        # never lands (suspend, modifier released early, …) this child
+        # will see the key go up via /dev/input and call ``voice
+        # dictate stop`` itself. Best-effort: spawn failure (e.g. no
+        # input-group membership) is non-fatal; the ``arecord -d 120``
+        # cap remains as the last-line defence.
+        try:
+            dictation_watchdog.spawn(
+                settings.dictation_watchdog_key,
+                settings.dictation_watchdog_poll_ms,
+            )
+        except Exception as e:
+            log(f"dictation: watchdog spawn failed ({e}); relying on -d cap.")
+
 
 def stop_dictation_and_inject() -> None:
     """Stop the dictation recording, transcribe with whisper, inject
@@ -526,6 +540,15 @@ def stop_dictation_and_inject() -> None:
     with _pipeline_lock("stop_dictation_and_inject") as acquired:
         if not acquired:
             return
+
+        # Best-effort cleanup of the key watchdog: if it's still
+        # alive (normal case: a real key-up triggered us before the
+        # watchdog noticed) terminate it so it can't race a second
+        # ``dictate stop`` after we've already finished. Idempotent.
+        try:
+            dictation_watchdog.stop()
+        except Exception as e:
+            log(f"dictation: watchdog stop failed ({e}); continuing.")
 
         t0 = time.monotonic()
         log("=== turn start: stop_dictation_and_inject ===")

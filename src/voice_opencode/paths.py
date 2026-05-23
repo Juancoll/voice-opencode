@@ -123,6 +123,7 @@ AGENT_LOG_FILE: Path = PROJECT_ROOT / "logs" / "agent.log"
 # Kernel releases on process death either way.
 PIPELINE_LOCK_FILE: Path = STATE_DIR / "pipeline.lock"
 DICTATION_FOCUS_FILE: Path = STATE_DIR / "dictation.focus"
+DICTATION_WATCHDOG_PID_FILE: Path = STATE_DIR / "dictation.watchdog.pid"
 
 
 def ensure_dirs() -> None:

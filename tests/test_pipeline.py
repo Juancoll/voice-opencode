@@ -49,6 +49,12 @@ def isolated_lock(tmp_path, monkeypatch):
         pipeline.state_mod, "get_state",
         MagicMock(return_value="idle"),
     )
+    # Neutralise the out-of-process dictation watchdog: it forks a
+    # real subprocess that would (a) noisy-warn about fork-in-threaded,
+    # (b) try to open /dev/input on the test runner. Tests that care
+    # about the watchdog live in test_dictation_watchdog.py.
+    monkeypatch.setattr(pipeline.dictation_watchdog, "spawn", MagicMock())
+    monkeypatch.setattr(pipeline.dictation_watchdog, "stop", MagicMock())
     return lock_file
 
 

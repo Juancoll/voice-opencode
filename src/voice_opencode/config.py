@@ -124,8 +124,21 @@ class Settings:
     #   "type"  — synthesise key events via the input backend
     #             (ydotool/wtype on Linux). Survives clipboard contents
     #             but is slow and unreliable for long texts.
-    # Anything else is treated as "paste".
+    #   Anything else is treated as "paste".
     dictation_inject_method: str = "paste"
+    # Dictation watchdog (Linux only): poll the kernel directly via
+    # ``ioctl(EVIOCGKEY)`` on ``/dev/input/event*`` so a missed key-up
+    # event from the compositor can't strand an arecord forever.
+    # Detects when ``dictation_watchdog_key`` transitions from
+    # pressed → released and triggers ``voice dictate stop`` itself.
+    # Empty string disables it; the ``-d 120`` arecord cap remains as
+    # the last-line defence either way.
+    # Key name follows Linux evdev convention without the ``KEY_``
+    # prefix (e.g. ``"F9"``, ``"PAUSE"``, ``"SCROLLLOCK"``). Must match
+    # the actual Hyprland bind. Requires membership in the ``input``
+    # group on most distros.
+    dictation_watchdog_key: str = "F9"
+    dictation_watchdog_poll_ms: int = 200
 
     @property
     def opencode_url(self) -> str:
