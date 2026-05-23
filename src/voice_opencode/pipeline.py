@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -672,9 +673,46 @@ def _inject_text(text: str, method: str) -> None:
         # the data device AND give the compositor time to land focus
         # on the receiver (focus_window was issued moments ago).
         time.sleep(0.15)
-        desktop.press_key("ctrl+v")
+        _paste_shortcut()
         return
     except Exception as e:
         log(f"dictation: paste failed ({e}); falling back to type.")
         desktop.type_text(text)
+
+
+def _paste_shortcut() -> None:
+    """Send ``ctrl+v`` to the focused window.
+
+    Prefers ``ydotool`` over ``wtype`` *for this specific operation*:
+    on Wayland many apps (Firefox, Electron, some GTK4 builds) silently
+    drop ``modifier+key`` events that come from the
+    ``virtual-keyboard-unstable-v1`` protocol that wtype uses, so a
+    ``ctrl+v`` from wtype lands as a bare ``v`` keystroke or nothing
+    at all. ``ydotool`` injects via ``/dev/uinput`` at the kernel
+    level so every app sees it identical to a real keyboard.
+
+    Falls back to ``desktop.press_key`` (which may use wtype) only
+    when ydotool isn't installed — that path still works for the
+    apps that respect virtual-keyboard modifiers.
+    """
+    ydotool = shutil.which("ydotool")
+    if ydotool:
+        env = os.environ.copy()
+        env.setdefault(
+            "YDOTOOL_SOCKET",
+            f"/run/user/{os.getuid()}/.ydotool_socket",
+        )
+        try:
+            subprocess.run(
+                [ydotool, "key", "29:1", "47:1", "47:0", "29:0"],
+                env=env,
+                check=True,
+                capture_output=True,
+                timeout=2,
+            )
+            log("dictation: paste via ydotool (uinput).")
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            log(f"dictation: ydotool paste failed ({e}); falling back to press_key.")
+    desktop.press_key("ctrl+v")
 

@@ -3,6 +3,25 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-22 — Dictation paste: ydotool for ctrl+v
+
+Live test surfaced the real reason paste was landing in nothing on
+Hyprland: ``wtype`` sends key events through
+``virtual-keyboard-unstable-v1``, and many apps (Firefox, Electron,
+some GTK4 builds) silently drop ``modifier+key`` events from that
+protocol — so ``ctrl+v`` arrives as bare ``v`` or as nothing.
+
+Fix: ``_inject_text`` now routes the paste shortcut through
+``ydotool`` (``/dev/uinput``, kernel-level) using the raw keycode
+sequence ``29:1 47:1 47:0 29:0`` (LEFTCTRL+V). Every app sees it
+identical to a real keyboard. The rest of ``press_key`` still
+prefers wtype (no daemon needed for non-modifier keys). Falls back
+to ``desktop.press_key`` only when ydotool is missing.
+
+Two new tests: paste hits ydotool subprocess with the exact
+keycodes; missing-ydotool path falls back to ``press_key``. 568
+green, ruff + mypy clean.
+
 ## 2026-05-22 — Dictation key watchdog (evdev EVIOCGKEY)
 
 Belt-and-suspenders on top of ``arecord -d 120``: a detached child

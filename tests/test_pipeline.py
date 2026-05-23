@@ -529,14 +529,52 @@ def test_stop_dictation_injects_via_paste_when_configured(isolated_lock, monkeyp
     )
     cb = MagicMock()
     monkeypatch.setattr(pipeline._plat, "clipboard", cb, raising=False)
+    # Force the ydotool branch so we exercise the uinput shortcut.
+    monkeypatch.setattr(pipeline.shutil, "which", lambda _: "/usr/bin/ydotool")
+    runs: list[list[str]] = []
+
+    def fake_run(argv, **kw):
+        runs.append(argv)
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
     with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
          patch.object(pipeline.stt, "transcribe", return_value="hola"), \
          patch.object(pipeline.desktop, "type_text") as type_text, \
          patch.object(pipeline.desktop, "press_key") as press_key:
         pipeline.stop_dictation_and_inject()
     cb.write.assert_called_once_with("hola")
-    press_key.assert_called_once_with("ctrl+v")
+    # Must NOT go through press_key (wtype) — that's the bug we're fixing.
+    press_key.assert_not_called()
     type_text.assert_not_called()
+    # Must have sent the ctrl+v keycode sequence via ydotool.
+    assert runs, "ydotool subprocess never invoked"
+    assert runs[0][0] == "/usr/bin/ydotool"
+    assert runs[0][1] == "key"
+    # 29=LEFTCTRL, 47=V; press both, release both.
+    assert runs[0][2:] == ["29:1", "47:1", "47:0", "29:0"]
+
+
+def test_stop_dictation_paste_falls_back_to_press_key_when_no_ydotool(
+    isolated_lock, monkeypatch,
+):
+    """If ydotool isn't installed, paste falls through to desktop.press_key
+    (wtype). Documented limitation — works on apps that respect
+    virtual-keyboard modifiers."""
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "paste"})(),
+        raising=False,
+    )
+    cb = MagicMock()
+    monkeypatch.setattr(pipeline._plat, "clipboard", cb, raising=False)
+    monkeypatch.setattr(pipeline.shutil, "which", lambda _: None)
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola"), \
+         patch.object(pipeline.desktop, "press_key") as press_key:
+        pipeline.stop_dictation_and_inject()
+    cb.write.assert_called_once_with("hola")
+    press_key.assert_called_once_with("ctrl+v")
 
 
 def test_stop_dictation_paste_falls_back_to_type_on_clipboard_failure(
