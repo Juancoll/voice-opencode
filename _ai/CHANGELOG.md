@@ -3,6 +3,30 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-22 — Recorder watchdog + paste timing fixes
+
+After a real-world incident where a Ctrl+F9 press never received its
+release event (Hyprland missed the keyup; cause unknown — suspend,
+workspace switch, or modifier released before F9), arecord stayed
+alive ~6 hours and produced a 737 MB ``rec.wav``. Added ``-d 120`` to
+the arecord command line so the kernel-side recorder hard-caps at
+2 minutes regardless of what the pipeline does. arecord finalises the
+WAV header cleanly on its own timeout; the orphan ``rec.pid`` gets
+reaped by ``is_recording()`` on the next invocation. 2 minutes is
+comfortably above any realistic single dictation (the longest live
+test so far was 1m51s).
+
+Also bumped two sleeps in the dictation paste path: focus-restore
+80 → 150 ms and a new 150 ms after ``clipboard.write`` before
+``ctrl+v``. Without the post-clipboard settle, on Hyprland the
+synthesised paste could fire before either (a) wl-copy had exposed
+the new offer on the data device or (b) the compositor had landed
+focus on the receiver — log said "injected via paste" but the field
+stayed empty.
+
+Test for the watchdog flag added to ``test_backend_recorder.py``;
+552 tests still green, ruff + mypy clean.
+
 ## 2026-05-21 — Dictation mode (Ctrl+F9)
 
 Added a second pipeline flow that reuses the recorder + STT but skips

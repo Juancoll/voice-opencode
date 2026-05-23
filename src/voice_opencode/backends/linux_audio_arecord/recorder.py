@@ -75,9 +75,14 @@ class ArecordRecorderBackend:
             return
         out_path.unlink(missing_ok=True)
 
+        # -d 120: hard cap at 2 min so a missed "stop" event (lost release
+        # bind, crash, suspend) cannot leave a zombie arecord eating disk.
+        # arecord finalises the WAV header cleanly on its own timeout; the
+        # orphan rec.pid is reaped by is_recording() on next invocation.
         cmd = [
             "arecord",
             "-q",
+            "-d", "120",
             "-f", "S16_LE",
             "-r", "16000",
             "-c", "1",

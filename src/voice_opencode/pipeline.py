@@ -608,10 +608,10 @@ def _restore_dictation_focus() -> None:
         return
     try:
         _plat.wm.focus_window(wid)
-        # 80ms — empirically enough on Hyprland for the focus change
-        # to land before ydotool's first key event. Imperceptible to
-        # the user.
-        time.sleep(0.08)
+        # 150ms — empirically enough on Hyprland for the focus change
+        # to land before the next event fires. Imperceptible to the
+        # user. Bumped from 80ms after 2026-05-21 paste-into-void bug.
+        time.sleep(0.15)
         log(f"dictation: restored focus to {wid!r}.")
     except Exception as e:
         log(f"dictation: focus_window({wid!r}) failed ({e}); "
@@ -629,6 +629,15 @@ def _inject_text(text: str, method: str) -> None:
     keystroke injection set ``dictation_inject_method="type"`` —
     accept that ydotool throughput caps around 60 chars/s and long
     inputs may lose characters.
+
+    Timing note (2026-05-21 incident): writing a multi-KB text to
+    ``wl-copy`` is not instant, and on Hyprland the focus change from
+    the HUD to the captured window can race with the synthesised
+    ``ctrl+v``. We sleep 150 ms after the clipboard write so the
+    compositor settles before the keystroke fires. Without this the
+    paste lands in nothing (the HUD has just released focus but the
+    receiver hasn't claimed it yet) and the user sees an empty field
+    despite the log saying "injected".
     """
     if method == "type":
         desktop.type_text(text)
@@ -636,6 +645,10 @@ def _inject_text(text: str, method: str) -> None:
     # paste (default and any other value)
     try:
         _plat.clipboard.write(text)
+        # Two-stage settle: give wl-copy time to expose the offer on
+        # the data device AND give the compositor time to land focus
+        # on the receiver (focus_window was issued moments ago).
+        time.sleep(0.15)
         desktop.press_key("ctrl+v")
         return
     except Exception as e:

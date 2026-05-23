@@ -106,6 +106,11 @@ class TestStart:
 
         cmd = popen.call_args.args[0]
         assert cmd[0] == "arecord"
+        # -d 120: hard 2-minute cap so a missed stop event cannot leave
+        # a zombie arecord eating disk (2026-05-21 zombie incident).
+        assert "-d" in cmd
+        d_idx = cmd.index("-d")
+        assert cmd[d_idx + 1] == "120"
         assert "-f" in cmd and "S16_LE" in cmd
         assert "-r" in cmd and "16000" in cmd
         assert "-c" in cmd and "1" in cmd
