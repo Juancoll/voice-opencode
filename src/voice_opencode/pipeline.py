@@ -716,6 +716,31 @@ def _inject_text(text: str, method: str) -> None:
                 )
             elif actual:
                 log(f"dictation: focus verified on {actual!r}.")
+                # KNOWN LIMITATION: Electron-Wayland (Obsidian, VS Code,
+                # Discord, Slack, …) and Firefox-Wayland do NOT accept
+                # synthesised modifier+key events from uinput/ydotool —
+                # ctrl+v lands as bare 'v' or gets dropped. Warn loud
+                # so the user knows the paste will fail and they need
+                # to set ``dictation_inject_method = "type"`` or paste
+                # manually with the mouse.
+                wc = (
+                    getattr(now, "wm_class", None)
+                    or getattr(now, "app_id", "")
+                    or ""
+                ).lower()
+                if any(
+                    n in wc for n in (
+                        "obsidian", "code", "discord", "slack",
+                        "spotify", "electron", "firefox",
+                    )
+                ):
+                    log(
+                        f"dictation: WARNING target {wc!r} is "
+                        "Electron/Firefox on Wayland — paste via "
+                        "ydotool is known to fail for ctrl+v. "
+                        "Text is on the clipboard; paste manually or "
+                        "set dictation_inject_method='type'."
+                    )
         except FileNotFoundError:
             pass
         except Exception as e:

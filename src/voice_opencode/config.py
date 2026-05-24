@@ -124,7 +124,22 @@ class Settings:
     #   "type"  — synthesise key events via the input backend
     #             (ydotool/wtype on Linux). Survives clipboard contents
     #             but is slow and unreliable for long texts.
-    #   Anything else is treated as "paste".
+    # Anything else is treated as "paste".
+    #
+    # KNOWN LIMITATION (2026-05-22): "paste" does NOT work in
+    # Electron apps running with --ozone-platform=wayland (Obsidian,
+    # VS Code, Discord, Slack, …) nor in Firefox on Wayland. These
+    # apps receive the synthesised modifier+key sequence as raw
+    # Wayland keystrokes but fail to associate the modifier with the
+    # key event, so Ctrl+V lands as bare 'V' or is dropped. The text
+    # IS on the clipboard — you can paste it manually with the mouse
+    # / real keyboard. Workarounds:
+    #   * Set ``dictation_inject_method = "type"`` (slow but
+    #     universal — synth-keystrokes character by character).
+    #   * Set it per-app via wrapper script (not supported by this
+    #     codebase today).
+    # GTK/Qt/terminal apps (ghostty, kitty, alacritty, gnome-text,
+    # konsole, …) handle "paste" correctly.
     dictation_inject_method: str = "paste"
     # Dictation watchdog (Linux only): poll the kernel directly via
     # ``ioctl(EVIOCGKEY)`` on ``/dev/input/event*`` so a missed key-up

@@ -3,6 +3,33 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-22 — Document Electron/Firefox paste limitation + HUD scope fix
+
+Live testing confirmed paste works perfectly in GTK/Qt/terminal apps
+but silently fails in Electron-Wayland (Obsidian, VS Code, Discord)
+and Firefox-Wayland: the synthesised ``ctrl+v`` from ydotool/uinput
+arrives but Electron doesn't pair the modifier with the key event,
+so it lands as bare ``v`` or is dropped. Text IS on the clipboard
+either way.
+
+Three changes:
+
+* ``config.py`` docstring for ``dictation_inject_method`` now
+  spells out the limitation and suggests setting it to ``"type"``
+  for Electron-heavy workflows.
+* ``_inject_text`` logs a loud ``WARNING target … is Electron/Firefox
+  on Wayland — paste via ydotool is known to fail`` when the
+  restored focus is one of those apps, so the user understands why
+  the text didn't appear despite the log saying "injected".
+* ``mcp_server._audit`` now gates HUD updates on a real F9 turn
+  being in flight (``state.get_state() != "idle"``). Other opencode
+  sessions running in unrelated terminals (aigent, etc.) call this
+  MCP too — without the gate, their tool calls were stomping the
+  tray HUD with random ``memory_append`` / ``focus_window``
+  notifications. The audit log still records every call.
+
+570 green, ruff + mypy clean.
+
 ## 2026-05-22 — Dictation paste: ydotool for ctrl+v
 
 Live test surfaced the real reason paste was landing in nothing on
