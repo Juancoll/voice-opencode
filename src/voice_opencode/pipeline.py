@@ -495,7 +495,15 @@ def start_dictation() -> None:
             w = _plat.wm.active_window()
             if w is not None and getattr(w, "id", None):
                 DICTATION_FOCUS_FILE.write_text(str(w.id))
-                log(f"dictation: captured focused window id={w.id!r}")
+                # Log class/title too so post-mortem on a "paste went
+                # to the wrong window" report doesn't depend on the
+                # window still being alive at debug time.
+                wclass = getattr(w, "wm_class", None) or getattr(w, "app_id", "?")
+                wtitle = (getattr(w, "title", "") or "")[:60]
+                log(
+                    f"dictation: captured focused window id={w.id!r} "
+                    f"class={wclass!r} title={wtitle!r}"
+                )
             else:
                 DICTATION_FOCUS_FILE.unlink(missing_ok=True)
                 log("dictation: no focused window to remember.")
@@ -669,10 +677,49 @@ def _inject_text(text: str, method: str) -> None:
     # paste (default and any other value)
     try:
         _plat.clipboard.write(text)
+        # Verify: read the clipboard back. If it doesn't match the
+        # text we just wrote, the paste WILL fail silently — log it
+        # loud so we know not to trust the "injected" line below.
+        try:
+            roundtrip = _plat.clipboard.read()
+        except Exception as e:
+            roundtrip = None
+            log(f"dictation: clipboard read-back failed ({e}).")
+        if roundtrip != text:
+            log(
+                f"dictation: WARNING clipboard mismatch — "
+                f"wrote {len(text)}c, read back "
+                f"{len(roundtrip) if roundtrip else 0}c. "
+                f"Paste will likely fail."
+            )
+        else:
+            log(f"dictation: clipboard verified ({len(text)} chars).")
         # Two-stage settle: give wl-copy time to expose the offer on
         # the data device AND give the compositor time to land focus
         # on the receiver (focus_window was issued moments ago).
         time.sleep(0.15)
+        # Verify focus actually landed where we expected it.
+        try:
+            now = _plat.wm.active_window()
+            expected = DICTATION_FOCUS_FILE.read_text().strip()
+            actual = str(getattr(now, "id", "") or "") if now else ""
+            if expected and actual and expected != actual:
+                wc = (
+                    getattr(now, "wm_class", None)
+                    or getattr(now, "app_id", "?")
+                )
+                wt = (getattr(now, "title", "") or "")[:60]
+                log(
+                    f"dictation: WARNING focus mismatch — expected "
+                    f"{expected!r}, current is {actual!r} "
+                    f"({wc!r} | {wt!r}). Paste will go to the wrong window."
+                )
+            elif actual:
+                log(f"dictation: focus verified on {actual!r}.")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log(f"dictation: focus verify failed ({e}); continuing.")
         _paste_shortcut()
         return
     except Exception as e:
@@ -698,21 +745,46 @@ def _paste_shortcut() -> None:
     ydotool = shutil.which("ydotool")
     if ydotool:
         env = os.environ.copy()
-        env.setdefault(
-            "YDOTOOL_SOCKET",
-            f"/run/user/{os.getuid()}/.ydotool_socket",
-        )
-        try:
-            subprocess.run(
-                [ydotool, "key", "29:1", "47:1", "47:0", "29:0"],
-                env=env,
-                check=True,
-                capture_output=True,
-                timeout=2,
+        sock = f"/run/user/{os.getuid()}/.ydotool_socket"
+        env.setdefault("YDOTOOL_SOCKET", sock)
+        # Verify socket exists before calling — otherwise ydotool
+        # returns 0 silently in some versions and the keypress is
+        # discarded.
+        if not os.path.exists(sock):
+            log(
+                f"dictation: ydotool socket {sock!r} missing; "
+                "ydotoold not running. Falling back to press_key."
             )
-            log("dictation: paste via ydotool (uinput).")
-            return
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            log(f"dictation: ydotool paste failed ({e}); falling back to press_key.")
+        else:
+            try:
+                result = subprocess.run(
+                    [ydotool, "key", "29:1", "47:1", "47:0", "29:0"],
+                    env=env,
+                    capture_output=True,
+                    timeout=2,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    log(
+                        f"dictation: paste via ydotool (uinput) ok "
+                        f"(stderr={result.stderr.strip()!r})"
+                    )
+                    return
+                log(
+                    f"dictation: ydotool exit={result.returncode} "
+                    f"stderr={result.stderr.strip()!r} "
+                    f"stdout={result.stdout.strip()!r}; "
+                    "falling back to press_key."
+                )
+            except subprocess.TimeoutExpired:
+                log(
+                    "dictation: ydotool timed out after 2s; "
+                    "falling back to press_key."
+                )
+            except Exception as e:
+                log(
+                    f"dictation: ydotool raised ({e}); "
+                    "falling back to press_key."
+                )
     desktop.press_key("ctrl+v")
 
