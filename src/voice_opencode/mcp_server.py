@@ -30,6 +30,7 @@ from typing import Any
 
 from . import agent, capacity, config
 from . import platform as plat
+from . import state as state_mod
 from .logging import log
 from .notify import turn_update
 from .paths import SCREENSHOT_FILE
@@ -153,9 +154,18 @@ def _audit(tool: str, args: dict[str, Any], result: str = "ok") -> None:
     """Wrapper around ``agent.audit`` that also updates the per-turn
     persistent notification (ADR-0025) so the user sees what the
     agent is doing in real time. Best-effort: notify failures are
-    swallowed."""
+    swallowed.
+
+    HUD scope: we only push to the HUD when a user-initiated F9
+    turn is actually in flight (state != "idle"). Otherwise this
+    MCP server may be serving a *different* opencode session
+    (another terminal running ``opencode`` against the same
+    project), and its tool calls would otherwise stomp on the HUD
+    the tray owns. The audit log keeps every call regardless so
+    nothing is lost — only the visual notification is gated.
+    """
     agent.audit(tool, args, result=result)
-    if result == "ok":
+    if result == "ok" and state_mod.get_state() != "idle":
         try:
             turn_update("⚙️ Agente actuando", _fmt_action(tool, args))
         except Exception:

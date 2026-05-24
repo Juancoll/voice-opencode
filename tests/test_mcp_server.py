@@ -295,11 +295,13 @@ def test_fmt_action_truncates_overall_body():
 # ---------------------------------------------------------------------------
 # _audit wrapper: pipes ok-results into turn_update
 # ---------------------------------------------------------------------------
-def test_audit_calls_turn_update_on_ok(monkeypatch):
+def test_audit_calls_turn_update_when_f9_turn_active(monkeypatch):
+    """During a real F9 turn (state != idle) tool calls must reach the HUD."""
     calls = []
     monkeypatch.setattr(mcp_server, "turn_update",
                         lambda title, body: calls.append((title, body)))
     monkeypatch.setattr(mcp_server.agent, "audit", lambda *a, **k: None)
+    monkeypatch.setattr(mcp_server.state_mod, "get_state", lambda: "thinking")
     mcp_server._audit("type_text", {"text": "hola"})
     assert len(calls) == 1
     assert "type_text" in calls[0][1]
@@ -310,5 +312,23 @@ def test_audit_skips_turn_update_on_error_result(monkeypatch):
     monkeypatch.setattr(mcp_server, "turn_update",
                         lambda title, body: calls.append((title, body)))
     monkeypatch.setattr(mcp_server.agent, "audit", lambda *a, **k: None)
+    monkeypatch.setattr(mcp_server.state_mod, "get_state", lambda: "thinking")
     mcp_server._audit("type_text", {"text": "x"}, result="refused: ...")
     assert calls == []
+
+
+def test_audit_skips_turn_update_when_idle(monkeypatch):
+    """Other opencode sessions (different terminals) call this MCP too;
+    when no F9 turn is active their tool calls must NOT touch the HUD
+    the tray owns. Audit log still records them — only the visual
+    notification is gated."""
+    hud_calls = []
+    audit_calls = []
+    monkeypatch.setattr(mcp_server, "turn_update",
+                        lambda t, b: hud_calls.append((t, b)))
+    monkeypatch.setattr(mcp_server.agent, "audit",
+                        lambda *a, **k: audit_calls.append((a, k)))
+    monkeypatch.setattr(mcp_server.state_mod, "get_state", lambda: "idle")
+    mcp_server._audit("memory_append", {"tags": ["aigent"]})
+    assert hud_calls == [], "HUD must not be touched when no F9 turn active"
+    assert len(audit_calls) == 1, "audit log must still record the call"
