@@ -564,6 +564,95 @@ def test_stop_dictation_injects_via_paste_when_configured(isolated_lock, monkeyp
     assert ydotool_runs[0][2:] == ["29:1", "47:1", "47:0", "29:0"]
 
 
+@pytest.mark.parametrize("wm_class", [
+    "obsidian",
+    "code",                # VS Code
+    "code-oss",
+    "vscodium",
+    "discord",
+    "slack",
+    "spotify",
+    "firefox",
+    "Firefox-esr",         # case-insensitive match
+    "thunderbird",
+    "some.custom.electron.thing",
+])
+def test_target_needs_typing_true_for_known_incompatible(wm_class):
+    """Apps known to drop synth ctrl+v on Wayland must trigger
+    the auto type_text fallback. Match is case-insensitive on the
+    lowercased input — the helper expects pre-lowercased input."""
+    assert pipeline._target_needs_typing(wm_class.lower()) is True
+
+
+@pytest.mark.parametrize("wm_class", [
+    "",                              # no class → don't second-guess
+    "com.mitchellh.ghostty",         # terminal
+    "org.kde.konsole",
+    "alacritty",
+    "kitty",
+    "google-chrome",                 # chrome works, only firefox is broken
+    "gnome-text-editor",
+    "org.gnome.gedit",
+])
+def test_target_needs_typing_false_for_compatible(wm_class):
+    assert pipeline._target_needs_typing(wm_class) is False
+
+
+def test_stop_dictation_auto_types_when_target_is_electron(
+    isolated_lock, monkeypatch,
+):
+    """Real-world bug fix: ctrl+v from ydotool/uinput is silently
+    dropped by Electron-Wayland (Obsidian, VS Code, …). When focus
+    verify spots one of those targets, we must skip the paste and
+    type the text instead — slow but it actually works."""
+    monkeypatch.setattr(
+        pipeline, "settings",
+        type("S", (), {"dictation_inject_method": "paste"})(),
+        raising=False,
+    )
+    cb = MagicMock()
+    cb.read.return_value = "hola electron"
+    monkeypatch.setattr(pipeline._plat, "clipboard", cb, raising=False)
+    # Active window IS the captured one (no focus mismatch) and is
+    # Obsidian — the trigger case. Use a real namespace so getattr
+    # returns the plain strings, not nested MagicMocks.
+    from types import SimpleNamespace
+    obsidian = SimpleNamespace(id="0x1234", wm_class="obsidian", title="Notes")
+    monkeypatch.setattr(
+        pipeline._plat, "wm",
+        MagicMock(active_window=MagicMock(return_value=obsidian)),
+        raising=False,
+    )
+    # Make the focus file contain matching id so we don't trip the
+    # mismatch branch.
+    focus_file = isolated_lock.parent / "dictation.focus"
+    focus_file.write_text("0x1234")
+    monkeypatch.setattr(pipeline, "DICTATION_FOCUS_FILE", focus_file)
+    monkeypatch.setattr(pipeline.shutil, "which", lambda _: "/usr/bin/ydotool")
+    monkeypatch.setattr(pipeline.os.path, "exists", lambda _p: True)
+    ydotool_runs: list[list[str]] = []
+
+    def fake_run(argv, **kw):
+        ydotool_runs.append(argv)
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    with patch.object(pipeline.audio, "stop", return_value="/tmp/x.wav"), \
+         patch.object(pipeline.stt, "transcribe", return_value="hola electron"), \
+         patch.object(pipeline.desktop, "type_text") as type_text, \
+         patch.object(pipeline.desktop, "press_key") as press_key:
+        pipeline.stop_dictation_and_inject()
+    # The clipboard is still written (so user can paste manually if
+    # they want) but the actual injection goes through type_text.
+    cb.write.assert_called_once_with("hola electron")
+    type_text.assert_called_once_with("hola electron")
+    press_key.assert_not_called()
+    # No ydotool key call should have been issued — the whole point.
+    assert not any(
+        r and len(r) > 1 and r[1] == "key" for r in ydotool_runs
+    ), f"must not send ctrl+v to Electron: {ydotool_runs!r}"
+
+
 def test_stop_dictation_warns_when_clipboard_roundtrip_mismatches(
     isolated_lock, monkeypatch,
 ):

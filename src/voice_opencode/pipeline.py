@@ -698,11 +698,28 @@ def _inject_text(text: str, method: str) -> None:
         # the data device AND give the compositor time to land focus
         # on the receiver (focus_window was issued moments ago).
         time.sleep(0.15)
-        # Verify focus actually landed where we expected it.
+        # Auto-fallback: ctrl+v from uinput is reliably dropped by
+        # Electron-Wayland (Obsidian, VS Code, Discord, Slack, …)
+        # and Firefox-Wayland. Detect those targets and type the
+        # text instead — slow but universal. Verify focus too so a
+        # mismatch (paste-to-wrong-window) doesn't get logged as
+        # success.
+        target_class = ""
         try:
             now = _plat.wm.active_window()
-            expected = DICTATION_FOCUS_FILE.read_text().strip()
+            if now is not None:
+                target_class = (
+                    getattr(now, "wm_class", None)
+                    or getattr(now, "app_id", "")
+                    or ""
+                ).lower()
             actual = str(getattr(now, "id", "") or "") if now else ""
+            try:
+                expected = DICTATION_FOCUS_FILE.read_text().strip()
+            except FileNotFoundError:
+                # _restore_dictation_focus already consumed it; the
+                # focus check is best-effort, so just skip it.
+                expected = ""
             if expected and actual and expected != actual:
                 wc = (
                     getattr(now, "wm_class", None)
@@ -716,40 +733,53 @@ def _inject_text(text: str, method: str) -> None:
                 )
             elif actual:
                 log(f"dictation: focus verified on {actual!r}.")
-                # KNOWN LIMITATION: Electron-Wayland (Obsidian, VS Code,
-                # Discord, Slack, …) and Firefox-Wayland do NOT accept
-                # synthesised modifier+key events from uinput/ydotool —
-                # ctrl+v lands as bare 'v' or gets dropped. Warn loud
-                # so the user knows the paste will fail and they need
-                # to set ``dictation_inject_method = "type"`` or paste
-                # manually with the mouse.
-                wc = (
-                    getattr(now, "wm_class", None)
-                    or getattr(now, "app_id", "")
-                    or ""
-                ).lower()
-                if any(
-                    n in wc for n in (
-                        "obsidian", "code", "discord", "slack",
-                        "spotify", "electron", "firefox",
-                    )
-                ):
-                    log(
-                        f"dictation: WARNING target {wc!r} is "
-                        "Electron/Firefox on Wayland — paste via "
-                        "ydotool is known to fail for ctrl+v. "
-                        "Text is on the clipboard; paste manually or "
-                        "set dictation_inject_method='type'."
-                    )
-        except FileNotFoundError:
-            pass
         except Exception as e:
             log(f"dictation: focus verify failed ({e}); continuing.")
+
+        if _target_needs_typing(target_class):
+            log(
+                f"dictation: target {target_class!r} ignores synth "
+                "ctrl+v on Wayland; auto-typing instead. "
+                "(text remains on the clipboard too.)"
+            )
+            desktop.type_text(text)
+            return
         _paste_shortcut()
         return
     except Exception as e:
         log(f"dictation: paste failed ({e}); falling back to type.")
         desktop.type_text(text)
+
+
+# Apps known to drop synth modifier+key events on Wayland. Match is
+# substring-on-lowercase against ``wm_class``/``app_id``. Conservative:
+# anything not on the list still tries the fast paste path. Extending
+# this list is a one-line change; the warning in ``_inject_text`` is
+# the canary that tells us when a new app needs adding.
+_PASTE_INCOMPATIBLE_CLASSES: tuple[str, ...] = (
+    "obsidian",
+    "discord",
+    "slack",
+    "spotify",
+    "electron",
+    "firefox",
+    "thunderbird",
+    "code",          # VS Code, code-oss, code-insiders
+    "vscodium",
+)
+
+
+def _target_needs_typing(wm_class: str) -> bool:
+    """Return True iff the focused app is known to ignore synth ctrl+v
+    from uinput on Wayland and we should ``type_text`` instead.
+
+    ``wm_class`` must already be lowercased; empty string returns
+    False (we don't have a class → can't decide → trust the user's
+    configured method).
+    """
+    if not wm_class:
+        return False
+    return any(n in wm_class for n in _PASTE_INCOMPATIBLE_CLASSES)
 
 
 def _paste_shortcut() -> None:

@@ -3,6 +3,23 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-24 — Auto-fallback to type_text for Electron/Firefox targets
+
+Documenting the limitation wasn't enough — user still hit it in
+Obsidian. `_inject_text` now detects the focused window's class
+post focus-verify and, when it matches the known-incompatible list
+(`obsidian`, `code*`, `discord`, `slack`, `spotify`, `electron`,
+`firefox`, `thunderbird`), skips the ctrl+v shortcut and calls
+`desktop.type_text(text)` instead. Slow (~60 c/s via ydotool) but
+universal. Clipboard write still happens so the user can paste
+manually too. Reordered focus-verify so `target_class` capture is
+independent of the focus-file read (which `_restore_dictation_focus`
+consumes in its `finally`, leaving a `FileNotFoundError` for the
+verify-step that previously skipped the class capture). 20 new tests
+(13 parametrised `_target_needs_typing`, 1 auto-type integration,
+plus regression of existing paste/clipboard cases). 590 tests total,
+ruff/mypy clean.
+
 ## 2026-05-22 — Document Electron/Firefox paste limitation + HUD scope fix
 
 Live testing confirmed paste works perfectly in GTK/Qt/terminal apps
