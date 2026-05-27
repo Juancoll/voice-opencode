@@ -140,7 +140,7 @@ class Settings:
     #     codebase today).
     # GTK/Qt/terminal apps (ghostty, kitty, alacritty, gnome-text,
     # konsole, …) handle "paste" correctly.
-    dictation_inject_method: str = "paste"
+    dictation_inject_method: str = "type"
     # Dictation watchdog (Linux only): poll the kernel directly via
     # ``ioctl(EVIOCGKEY)`` on ``/dev/input/event*`` so a missed key-up
     # event from the compositor can't strand an arecord forever.
