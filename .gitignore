@@ -13,6 +13,7 @@ venv/
 
 # Big binary assets — re-downloadable via install.sh / download-voice.sh
 models/*.bin
+models/faster-whisper/
 voices/*.onnx
 voices/*.onnx.json
 

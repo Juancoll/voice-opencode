@@ -55,6 +55,22 @@ def isolated_lock(tmp_path, monkeypatch):
     # about the watchdog live in test_dictation_watchdog.py.
     monkeypatch.setattr(pipeline.dictation_watchdog, "spawn", MagicMock())
     monkeypatch.setattr(pipeline.dictation_watchdog, "stop", MagicMock())
+    # Default: streaming dictation OFF in tests so existing batch-flow
+    # tests keep exercising the legacy arecord path. Tests that care
+    # about the streaming branch override these explicitly.
+    monkeypatch.setattr(
+        pipeline.streaming_dictation, "is_available",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        pipeline.streaming_dictation, "is_running",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(pipeline.streaming_dictation, "spawn", MagicMock())
+    monkeypatch.setattr(
+        pipeline.streaming_dictation, "stop",
+        MagicMock(return_value=True),
+    )
     return lock_file
 
 

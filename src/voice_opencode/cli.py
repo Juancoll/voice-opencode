@@ -105,6 +105,16 @@ def cmd_dictate(args: list[str]) -> int:
         pipeline.stop_dictation_and_inject()
     elif sub == "toggle":
         pipeline.toggle_dictation()
+    elif sub == "_stream_loop":
+        # Internal: this is the child-process entry point for the
+        # streaming dictation backend. Not a user-facing command.
+        # We ``os._exit`` after the loop returns because faster-whisper
+        # and sounddevice both spawn non-daemon worker threads that
+        # would otherwise prevent the interpreter from shutting down
+        # promptly. Exit code propagates so spawn() can detect crashes.
+        from . import streaming_dictation
+        rc = streaming_dictation.run_streaming_loop()
+        os._exit(rc)
     else:
         _eprint(f"Unknown: dictate {sub}")
         return 1

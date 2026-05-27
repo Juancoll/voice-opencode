@@ -215,6 +215,36 @@ check_whisper_model() {
     check_file "$ROOT/models/${WHISPER_MODEL:-ggml-small.bin}" "whisper model"
 }
 
+check_streaming_dictation() {
+    # Only meaningful if streaming is enabled in config. Cheap probe.
+    if ! "$ROOT/venv/bin/python" -c "from voice_opencode.config import settings; raise SystemExit(0 if getattr(settings,'streaming_dictation_enabled',False) else 1)" 2>/dev/null; then
+        _d_ok "streaming dictation disabled (legacy batch flow)"
+        return 0
+    fi
+    local missing
+    missing=$("$ROOT/venv/bin/python" -c "from voice_opencode.streaming_dictation import missing_dependencies; print(','.join(missing_dependencies()))" 2>/dev/null || echo "import-error")
+    if [[ "$missing" == "import-error" ]]; then
+        _d_err "streaming_dictation module won't import. Re-run ./install.sh"
+        return 1
+    fi
+    if [[ -n "$missing" ]]; then
+        _d_err "streaming dictation deps missing: $missing. Run: $ROOT/venv/bin/pip install $missing"
+        return 1
+    fi
+    _d_ok "streaming dictation deps installed (faster-whisper, silero-vad, sounddevice, numpy)"
+    # Model directory check. faster-whisper downloads to an HF cache
+    # layout (models--Systran--faster-whisper-small/blobs/...) with
+    # raw SHA-named blob files; the actual model is the largest blob
+    # (~480 MB for small int8). Look for any file >100 MB to confirm
+    # the download completed.
+    local fw_dir="$ROOT/models/faster-whisper"
+    if [[ -d "$fw_dir" ]] && find "$fw_dir" -type f -size +100M 2>/dev/null | grep -q .; then
+        _d_ok "faster-whisper model present under $fw_dir"
+    else
+        _d_warn "faster-whisper model not yet downloaded — first dictation will block ~30s downloading."
+    fi
+}
+
 check_voices() {
     if compgen -G "$ROOT/voices/*.onnx" > /dev/null; then
         local n
@@ -284,6 +314,11 @@ run_doctor() {
     check_python_deps
     check_whisper_model
     check_voices
+    check_streaming_dictation
+    # Add libportaudio2 check for sounddevice on apt/dnf
+    if ! "$ROOT/venv/bin/python" -c "import sounddevice" 2>/dev/null; then
+        _d_warn "sounddevice not importable; you may need libportaudio2 (apt) or portaudio (pacman/dnf)."
+    fi
 
     echo
     log "3. Services & sockets"
@@ -608,6 +643,15 @@ fi
 ./venv/bin/pip install --quiet --upgrade pip
 ./venv/bin/pip install --quiet requests PyQt6 mcp
 ok "runtime deps installed (requests, PyQt6, mcp)."
+
+# Streaming-dictation deps (faster-whisper + silero-vad + sounddevice).
+# Optional in spirit (the legacy batch flow still works without them)
+# but installed by default because the new dictation mode is on by
+# default in config and the user expects "F9 dictates" to just work.
+log "Installing streaming-dictation deps (faster-whisper, silero-vad, sounddevice)…"
+./venv/bin/pip install --quiet faster-whisper silero-vad sounddevice numpy \
+    || warn "streaming-dictation deps failed; fallback to batch flow will be used."
+ok "streaming-dictation deps installed."
 
 # Install the package itself in editable mode so `python -m voice_opencode` works
 # without needing the wrapper's PYTHONPATH=src trick when imported elsewhere.

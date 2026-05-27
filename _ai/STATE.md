@@ -56,11 +56,17 @@ session. Refresh this whenever something material changes.
 - `requests` — HTTP to opencode serve
 - `PyQt6` — system tray
 - `mcp` — MCP server SDK (FastMCP)
+- `faster-whisper 1.2.1` — streaming dictation STT (Ctrl+F9)
+- `silero-vad` — voice-activity detection for streaming dictation
+- `sounddevice 0.5.5` — mic capture for streaming dictation
+- `soundfile`, `numpy` — audio I/O / array math (pulled by the above)
 - `pytest`, `ruff`, `mypy`, `types-requests` (dev only)
 
 ## Models and voices
 
 - `models/ggml-small.bin` (466 MB) — whisper.cpp small Spanish-capable model
+- `models/faster-whisper/models--Systran--faster-whisper-small/` (~480 MB)
+  — HF cache layout, downloaded on first streaming dictation run
 - `voices/` — 8 Piper voices, default `es_AR-daniela-high` (single-speaker, 22050 Hz)
   - `es_AR-daniela-high`     ← current default
   - `es_ES-carlfm-x-low`

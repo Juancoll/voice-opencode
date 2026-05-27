@@ -124,6 +124,10 @@ AGENT_LOG_FILE: Path = PROJECT_ROOT / "logs" / "agent.log"
 PIPELINE_LOCK_FILE: Path = STATE_DIR / "pipeline.lock"
 DICTATION_FOCUS_FILE: Path = STATE_DIR / "dictation.focus"
 DICTATION_WATCHDOG_PID_FILE: Path = STATE_DIR / "dictation.watchdog.pid"
+STREAMING_DICTATION_PID_FILE: Path = STATE_DIR / "dictation.stream.pid"
+# Default location for the faster-whisper model bundle (CTranslate2
+# format). Kept inside the repo so install footprint is obvious.
+FASTER_WHISPER_DIR: Path = MODELS_DIR / "faster-whisper"
 
 
 def ensure_dirs() -> None:

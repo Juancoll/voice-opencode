@@ -3,6 +3,68 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-27 — Streaming dictation (Ctrl+F9, VAD + faster-whisper)
+
+Replaces the per-utterance batch flow (record → STT → inject) for
+**dictation only** (Ctrl+F9). Agent F9 still uses whisper.cpp batch.
+
+New module `streaming_dictation.py`: spawns a detached child process
+on `dictate start` (avoids loading the ~480 MB faster-whisper model
+into the long-lived tray, and matches the existing "each F9 = new
+process" pattern). The child runs a 3-thread pipeline:
+
+1. `_capture_loop` — `sounddevice.InputStream` @ 16 kHz mono, 512-sample
+   blocks → `audio_q`.
+2. `_vad_loop` — `silero-vad` `VADIterator` (threshold 0.5, 500 ms
+   silence trailing, 200 ms pre-pad). Emits whole utterances on
+   `utterance_q`; drains the in-flight buffer on shutdown.
+3. `_transcribe_loop` — `faster_whisper.WhisperModel` (`small`, `int8`,
+   CPU). Rolling `initial_prompt` capped at 200 chars; injects with
+   leading space after the first emission. Calls `ydotool type --`
+   directly (no PyQt dependency in the child).
+
+`pipeline.start_dictation`/`stop_dictation_and_inject` branch on
+`streaming_dictation.is_available()` / `is_running()`. Batch flow
+preserved as fallback; all 590 existing dictation tests continue
+to exercise it (test fixture mocks streaming entry points to False).
+
+Lifecycle: PID file at `STREAMING_DICTATION_PID_FILE`. SIGTERM →
+handler sets `state.running=False` + `shutdown_event` → capture stops,
+VAD flushes tail, transcribe finishes, then `os._exit(0)` (faster-whisper
++ sounddevice + torch leave non-daemon worker threads that otherwise
+hang interpreter shutdown for many seconds). Stop polls with
+`_process_alive()` which reads `/proc/{pid}/status` to detect zombie
+state (plain `os.kill(pid, 0)` returns true for zombies and was
+making `stop()` always wait the full timeout). Stop now returns in
+~100 ms on a clean drain. SIGKILL escalation after 8 s.
+
+`model.transcribe` called with `no_speech_threshold=0.6` and
+`log_prob_threshold=-1.0` to drop the classic "Subtítulos realizados
+por la comunidad de Amara.org" hallucination on near-silent segments.
+
+New config: `streaming_dictation_enabled`, `_model="small"`,
+`_model_dir`, `_compute_type="int8"`, `_device="cpu"`,
+`_vad_threshold=0.5`, `_vad_silence_ms=500`, `_vad_pad_ms=200`,
+`_beam_size=5`, `_language="es"`.
+
+Installer: `--doctor` adds `check_streaming_dictation` (deps + model
+blob >100 MB detection via `find -type f -size +100M`, since the HF
+cache stores blobs by SHA without extensions). Install step adds
+`pip install faster-whisper silero-vad sounddevice numpy soundfile`.
+
+Tests: 23 new in `test_streaming_dictation.py` (capability probe,
+PID lifecycle, SIGTERM→SIGKILL escalation, VAD utterance emit +
+tail-drain, transcribe loop prompt cap + leading-space + exception
+resilience + empty-text skip, `_type_text` argv format with `--`).
+613 total green, ruff clean, mypy clean (78 source files).
+
+End-to-end verified on host: spawn → warmup → mic open → SIGTERM →
+drain → tail-flush → transcribe → `os._exit` → child reaped in 4.4 s
+total (after 5 s of recording). Hallucination guards added in same
+commit because the empty-mic test produced the canned Amara phrase.
+
+Also in this session (pre-streaming):
+
 ## 2026-05-24 — Installer doctor + auto-restart tray on update
 
 User hit the classic foot-gun: tray crashed silently, F9 was bound

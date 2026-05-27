@@ -5,6 +5,76 @@ Alternatives → Consequences. Date format: YYYY-MM-DD.
 
 ---
 
+## ADR-0032 — Streaming dictation: VAD-segmented faster-whisper in a child process
+
+Date: 2026-05-27
+
+### Context
+
+Dictation (Ctrl+F9) used the same batch flow as agent F9: record the
+entire utterance, then whisper.cpp STT, then inject. That was fine
+for short prompts to opencode but felt wrong for free-form dictation
+into editors / chat boxes / TUIs, where users expect text to appear
+as they speak. The user explicitly asked for "streaming dictation"
+and pointed at three candidate techniques: Macháček LocalAgreement-2,
+VAC-with-partials, and plain VAD-segmented chunking.
+
+### Decision
+
+VAD-segmented faster-whisper, append-only (no backspaces, no partial
+revisions). Each silero-vad-detected utterance is transcribed once
+on a 500 ms silence boundary and typed out via `ydotool`. Runs in a
+**detached child process** spawned per dictation turn — not in the
+tray, not in a thread of the parent CLI.
+
+### Alternatives considered
+
+1. **Macháček LocalAgreement-2** (whisper_streaming): emits partial
+   words as soon as two overlapping windows agree on a prefix.
+   Lowest perceived latency, but requires actively rewriting already-
+   typed text when later windows disagree — needs backspaces, which
+   are unsafe in arbitrary target apps (TUIs, Electron, password
+   fields). Rejected on safety + complexity.
+2. **VAC with partials**: emit hypotheses every N ms, finalize on
+   silence. Same backspace problem as above, plus the partial
+   hypotheses are noticeably noisy in Spanish.
+3. **Keep batch, just lower latency**: switch whisper.cpp to a smaller
+   model. Doesn't address the user's actual request (incremental
+   appearance of text).
+
+### Consequences
+
+* `streaming_dictation.py` is a brand-new module ~540 LOC; sits in
+  the same layer as `audio.py` / `stt.py` (used by `pipeline.py`,
+  imports nothing upward). Child process means **zero PyQt
+  dependency in the streaming code path** — `_type_text` calls
+  `ydotool` directly.
+* The faster-whisper `small int8` model (~480 MB) is downloaded once
+  into `models/faster-whisper/` and never loaded into the long-lived
+  tray. Each dictation turn pays a ~3 s warmup cost; acceptable
+  given push-to-talk semantics.
+* Agent F9 still uses whisper.cpp batch — the two flows coexist via
+  `streaming_dictation.is_available()` branch in `pipeline.py`. If
+  the streaming deps aren't installed (Settings.streaming_dictation_
+  enabled, faster-whisper + silero-vad + sounddevice importable),
+  dictation transparently falls back to the batch flow.
+* Process lifecycle uses PID file at `STREAMING_DICTATION_PID_FILE`
+  + SIGTERM-with-grace + SIGKILL escalation. `os._exit(0)` at end
+  of `run_streaming_loop` because faster-whisper / sounddevice / torch
+  leave non-daemon worker threads alive. `_process_alive()` reads
+  `/proc/{pid}/status` to detect zombie state — plain
+  `os.kill(pid, 0)` reports zombies as alive.
+* No backspace ⇒ no transcription correction. The first emission per
+  utterance is final. Trade-off: occasional mis-transcribed segments
+  vs. zero risk of clobbering arbitrary target apps. We mitigate
+  with `no_speech_threshold=0.6` + `log_prob_threshold=-1.0` to drop
+  the canonical "Subtítulos realizados por la comunidad de Amara.org"
+  Whisper hallucination on near-silent VAD segments.
+* Future: if a user wants partials they can opt in via a new config
+  flag, but the default stays safe.
+
+---
+
 ## ADR-0031 — Multi-OS / multi-WM scope & roadmap
 
 Date: 2026-05-21

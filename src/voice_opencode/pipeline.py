@@ -40,7 +40,7 @@ import subprocess
 import time
 from collections.abc import Iterator
 
-from . import agent, audio, desktop, dictation_watchdog, stt, tts
+from . import agent, audio, desktop, dictation_watchdog, streaming_dictation, stt, tts
 from . import platform as _plat
 from . import state as state_mod
 from .config import settings
@@ -471,12 +471,22 @@ def start_dictation() -> None:
 
     The state machine reuses ``recording`` — the tray only cares about
     "mic is hot", not which flow owns it.
+
+    Two implementations select automatically:
+
+    * **Streaming** (default when ``streaming_dictation_enabled`` and
+      deps installed): spawn a long-lived child that captures audio,
+      runs silero-vad to segment by silence, transcribes each utterance
+      with faster-whisper, and types it via ydotool the moment the
+      sentence closes. No "stop → batch transcribe" wait.
+    * **Batch** (fallback): the legacy arecord + whisper.cpp flow that
+      records the whole WAV, transcribes on release, and injects once.
     """
     if agent.is_blocking():
         why = "agent activo" if agent.is_active() else "en pausa"
         log(f"Blocked — ignoring dictation start ({why}).")
         return
-    if audio.is_recording():
+    if audio.is_recording() or streaming_dictation.is_running():
         log("Ctrl+F9 descartado: ya hay un turno en curso.")
         return
     with _pipeline_lock("start_dictation") as acquired:
@@ -511,6 +521,30 @@ def start_dictation() -> None:
             log(f"dictation: failed to capture focus ({e}); will skip restore.")
             DICTATION_FOCUS_FILE.unlink(missing_ok=True)
 
+        # Streaming path: child process owns the mic + transcription.
+        # We don't call audio.start() in that case — the child opens
+        # sounddevice itself and arecord stays out of the picture.
+        if streaming_dictation.is_available():
+            pid = streaming_dictation.spawn()
+            if pid is not None:
+                # Restore focus immediately: the streaming child types
+                # as it transcribes, so by the time the first sentence
+                # is ready the HUD must already have released focus.
+                _restore_dictation_focus()
+                set_state("recording")
+                turn_start("✍️ Dictando (stream)…", "Habla. Suelta Ctrl+F9 al terminar")
+                # Watchdog still useful in case Hyprland misses the release.
+                try:
+                    dictation_watchdog.spawn(
+                        settings.dictation_watchdog_key,
+                        settings.dictation_watchdog_poll_ms,
+                    )
+                except Exception as e:
+                    log(f"dictation: watchdog spawn failed ({e}).")
+                return
+            log("dictation: streaming spawn failed; falling back to batch.")
+
+        # Batch path: legacy arecord + on-release whisper.cpp transcribe.
         audio.start()
         set_state("recording")
         turn_start("✍️ Dictando…", "Suelta Ctrl+F9 para insertar")
@@ -558,6 +592,25 @@ def stop_dictation_and_inject() -> None:
             dictation_watchdog.stop()
         except Exception as e:
             log(f"dictation: watchdog stop failed ({e}); continuing.")
+
+        # Streaming branch: the child has been typing in real time
+        # already. All we have to do is SIGTERM it (which triggers
+        # the in-loop drain: flush tail utterance, transcribe, type)
+        # and wait for it to exit. No transcription / inject work in
+        # THIS process.
+        if streaming_dictation.is_running():
+            t0 = time.monotonic()
+            log("=== turn start: stop_dictation_and_inject (stream) ===")
+            ok = streaming_dictation.stop()
+            log(
+                f"streaming-dictation: child drained "
+                f"(ok={ok}, t={time.monotonic()-t0:.2f}s)"
+            )
+            DICTATION_FOCUS_FILE.unlink(missing_ok=True)
+            set_state("idle")
+            turn_update("✅ Dictado", "(streaming)")
+            turn_end()
+            return
 
         t0 = time.monotonic()
         log("=== turn start: stop_dictation_and_inject ===")

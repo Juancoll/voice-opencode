@@ -154,6 +154,42 @@ class Settings:
     # group on most distros.
     dictation_watchdog_key: str = "F9"
     dictation_watchdog_poll_ms: int = 200
+    # Streaming dictation (VAD + faster-whisper). When enabled, Ctrl+F9
+    # captures audio in a long-lived child process, segments it by
+    # silence (silero-vad), transcribes each utterance with
+    # faster-whisper, and types it at the cursor as soon as the
+    # sentence closes — instead of waiting for release to do one big
+    # batch transcription. Append-only (no backspaces). Falls back to
+    # the legacy arecord + whisper.cpp batch flow if the deps aren't
+    # installed or the model can't load.
+    streaming_dictation_enabled: bool = True
+    # Model identifier accepted by faster_whisper.WhisperModel(). The
+    # first run will download it to ~/.cache/huggingface unless
+    # streaming_dictation_model_dir overrides the location. "small"
+    # gives a decent latency/quality tradeoff in Spanish on CPU.
+    streaming_dictation_model: str = "small"
+    # Override model directory (so we keep the cache inside the
+    # project tree). Empty = default HF cache. We default it under
+    # ``models/faster-whisper/`` so the install footprint is obvious.
+    streaming_dictation_model_dir: str = ""
+    # Compute type: "int8" (fastest on CPU), "int8_float16", "float16"
+    # (GPU). int8 is ~7× realtime on a modern x86 CPU with small.
+    streaming_dictation_compute_type: str = "int8"
+    streaming_dictation_device: str = "cpu"
+    # Silero VAD threshold (0..1). Higher = stricter (more silence
+    # needed before closing a sentence); lower = more aggressive
+    # cutting. 0.5 is the upstream default.
+    streaming_dictation_vad_threshold: float = 0.5
+    # Minimum silence in ms before closing a sentence. 500ms is a
+    # comfortable "pause between sentences" without cutting mid-word.
+    streaming_dictation_vad_silence_ms: int = 500
+    # Pad utterance edges with this many ms of audio so the first/last
+    # syllable isn't clipped. 200ms is the upstream default.
+    streaming_dictation_vad_pad_ms: int = 200
+    # Whisper decoding params. beam_size=5 matches whisper_streaming's
+    # default and is reported as both faster and better than 1.
+    streaming_dictation_beam_size: int = 5
+    streaming_dictation_language: str = "es"
 
     @property
     def opencode_url(self) -> str:
