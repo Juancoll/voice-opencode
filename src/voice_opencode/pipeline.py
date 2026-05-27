@@ -530,7 +530,11 @@ def start_dictation() -> None:
                 # Restore focus immediately: the streaming child types
                 # as it transcribes, so by the time the first sentence
                 # is ready the HUD must already have released focus.
-                _restore_dictation_focus()
+                # keep_file=True: the child re-focuses the same target
+                # before every keystroke burst (the HUD steals focus
+                # back on each show()). stop_dictation_and_inject
+                # cleans the file up when the child has drained.
+                _restore_dictation_focus(keep_file=True)
                 set_state("recording")
                 turn_start("✍️ Dictando (stream)…", "Habla. Suelta Ctrl+F9 al terminar")
                 # Watchdog still useful in case Hyprland misses the release.
@@ -668,7 +672,7 @@ def toggle_dictation() -> None:
         start_dictation()
 
 
-def _restore_dictation_focus() -> None:
+def _restore_dictation_focus(*, keep_file: bool = False) -> None:
     """Re-focus the window that was active when dictation started.
 
     Reads the id persisted by ``start_dictation`` and asks the WM to
@@ -679,6 +683,13 @@ def _restore_dictation_focus() -> None:
     Failure is non-fatal: if the file is missing, the id is stale, or
     the WM call raises, we just log and let the inject fire on whatever
     window currently has focus (worst case: same as before the fix).
+
+    ``keep_file`` (streaming dictation only): leave the focus file in
+    place so the child process can re-focus the target before every
+    keystroke burst. The HUD keeps stealing focus across the session,
+    and the child has no other way to find the original target. The
+    file is then cleaned up by ``stop_dictation_and_inject`` once the
+    child has fully drained.
     """
     try:
         wid = DICTATION_FOCUS_FILE.read_text().strip()
@@ -702,7 +713,8 @@ def _restore_dictation_focus() -> None:
         log(f"dictation: focus_window({wid!r}) failed ({e}); "
             "injecting on current window.")
     finally:
-        DICTATION_FOCUS_FILE.unlink(missing_ok=True)
+        if not keep_file:
+            DICTATION_FOCUS_FILE.unlink(missing_ok=True)
 
 
 def _inject_text(text: str, method: str) -> None:

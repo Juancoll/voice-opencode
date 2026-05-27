@@ -87,6 +87,59 @@ def _corner_xy(geo, corner: str, margin: int) -> tuple[int, int]:
     return geo.left() + margin, geo.bottom() - _HUD_H - margin + 1
 
 
+def _current_focus_address() -> str | None:
+    """Return the Hyprland address of the currently focused window.
+
+    Used by the HUD to restore focus after it maps itself. ``None`` if
+    hyprctl is unavailable, the call fails, or the active window is the
+    HUD itself (in which case there's nothing useful to restore to —
+    we'd just bounce focus back to ourselves).
+    """
+    if not shutil.which("hyprctl"):
+        return None
+    try:
+        r = subprocess.run(
+            ["hyprctl", "-j", "activewindow"],
+            check=False, capture_output=True, text=True, timeout=0.5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        d = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+    addr = d.get("address")
+    title = d.get("title", "")
+    if not addr:
+        return None
+    # Skip if we're already focused on ourselves (no useful target to
+    # restore). Avoids a focus loop if HUD shows twice in quick
+    # succession.
+    if title == "voice-opencode-hud":
+        return None
+    return str(addr)
+
+
+def _focus_window_address(addr: str) -> None:
+    """Best-effort: ask Hyprland to focus the window with ``addr``.
+
+    Address strings look like ``0x563879ba25c0``. Silent on failure —
+    the HUD's job is to display, not to enforce focus state. The
+    streaming dictation child does its own per-utterance refocus as a
+    second line of defence.
+    """
+    try:
+        subprocess.run(
+            ["hyprctl", "dispatch", "focuswindow", f"address:{addr}"],
+            check=False, timeout=0.5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
@@ -190,12 +243,29 @@ class TurnHUD(QWidget):
         self.subtitle_label.setText(self._elide(subtitle))
         self._reposition()
         if not self.isVisible():
+            # Capture the window that has focus BEFORE we map the HUD
+            # so we can hand focus back to it once the compositor has
+            # finished mapping our window. Qt's WindowDoesNotAcceptFocus
+            # is advisory — Hyprland still focuses Tool/utility windows
+            # on map, which steals keyboard input from whatever editor
+            # the user was typing in (and breaks streaming dictation:
+            # ydotool typed into the HUD instead of kwrite). The only
+            # reliable fix that works across compositors is to remember
+            # who had focus and put it back.
+            prev = _current_focus_address()
             self.show()
             # Hyprland tiles new windows by default; force float + pin
             # + exact geometry via hyprctl now that the window exists.
             # Done in a single-shot timer so Hyprland has a tick to
             # register the new window before we address it by title.
             QTimer.singleShot(80, self._apply_hyprland_rules)
+            if prev:
+                # Slightly after the geometry rules so the focus restore
+                # is the LAST dispatch — anything that happens during
+                # mapping is then undone.
+                QTimer.singleShot(
+                    160, lambda p=prev: _focus_window_address(p)
+                )
             self._fade(0.0, 1.0)
         else:
             # Already visible: cancel any pending fade-out and snap to opaque.

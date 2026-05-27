@@ -51,6 +51,7 @@ from typing import Any
 from .config import settings
 from .logging import log
 from .paths import (
+    DICTATION_FOCUS_FILE,
     FASTER_WHISPER_DIR,
     STREAMING_DICTATION_PID_FILE,
 )
@@ -67,6 +68,19 @@ __all__ = [
 SR = 16000              # silero-vad and whisper both expect 16 kHz mono
 VAD_FRAME_SAMPLES = 512  # silero-vad requires exactly this @ 16 kHz
 SHUTDOWN_TIMEOUT_S = 8.0  # max wait for graceful drain after SIGTERM
+
+# Snapshot the in-progress utterance every N seconds while voice is
+# active, transcribe it cheaply (beam=1) and push it to the HUD as a
+# "transcribiendo: ..." subtitle. Lower = more responsive but more
+# CPU; 1.0 s is the same cadence whisper_streaming/Macháček uses for
+# its default re-transcribe step.
+_PARTIAL_INTERVAL_S = 1.0
+# Cap partial-snapshot length so very long monologues don't blow up
+# the partial transcribe time (which would lag the HUD updates).
+# After this many seconds of speech the partial is computed on the
+# tail only; the next VAD-confirmed boundary still emits the full
+# utterance to ydotool, so no text is lost.
+_PARTIAL_MAX_S = 12.0
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +242,7 @@ def stop(timeout: float = SHUTDOWN_TIMEOUT_S) -> bool:
 # Child entry point: the actual streaming loop
 # ---------------------------------------------------------------------------
 class _StreamState:
-    """Mutable shared state across the three loop threads.
+    """Mutable shared state across the loop threads.
 
     Plain object (no dataclass) so the signal handler can flip flags
     without needing a lock — every consumer reads through the queues
@@ -239,6 +253,12 @@ class _StreamState:
         self.running = True              # cleared by SIGTERM
         self.audio_q: queue.Queue[Any] = queue.Queue(maxsize=200)
         self.utterance_q: queue.Queue[Any] = queue.Queue(maxsize=20)
+        # Partials queue: snapshots of the in-progress utterance sent
+        # to the partial transcribe thread every ~1s while the user
+        # is still speaking, so the HUD can show live feedback
+        # ("transcribiendo: ..."). Bounded small because we only care
+        # about the latest snapshot — drops are fine.
+        self.partial_q: queue.Queue[Any] = queue.Queue(maxsize=2)
         # tail of the current utterance being accumulated
         self.current_utt: list[Any] = []
         # whitespace-joined history for the initial_prompt window
@@ -319,7 +339,18 @@ def run_streaming_loop() -> int:
     state = _StreamState()
 
     def _on_sig(_signum: int, _frame: Any) -> None:
-        log("streaming-dictation: SIGTERM received; draining.")
+        try:
+            active = _hypr_activewindow()
+            try:
+                wid = DICTATION_FOCUS_FILE.read_text().strip()
+            except OSError:
+                wid = "<missing>"
+            log(
+                f"streaming-dictation: SIGTERM received; draining. "
+                f"active={active} focus_file_wid={wid}"
+            )
+        except Exception:
+            log("streaming-dictation: SIGTERM received; draining.")
         state.running = False
         state.shutdown_event.set()
 
@@ -358,6 +389,17 @@ def run_streaming_loop() -> int:
             daemon=True,
             name="dictation-stt",
         ),
+        # Partial transcribe thread: shares the model with the final
+        # transcribe loop. faster-whisper's WhisperModel.transcribe()
+        # serialises internally on its own state, so concurrent calls
+        # from this thread and the final thread are safe (one will
+        # block briefly while the other runs).
+        threading.Thread(
+            target=_partial_loop,
+            args=(state, model, np),
+            daemon=True,
+            name="dictation-partial",
+        ),
     ]
     for t in threads:
         t.start()
@@ -375,12 +417,26 @@ def run_streaming_loop() -> int:
         pass
     threads[0].join(timeout=2.0)
     threads[1].join(timeout=2.0)
+    # Stop the partial-transcribe thread — it polls state.running so
+    # the sentinel is just a wakeup to skip the get() timeout.
+    try:
+        state.partial_q.put_nowait(None)
+    except queue.Full:
+        pass
+    threads[3].join(timeout=2.0)
     # Flush any utterance the VAD loop left mid-air.
     try:
         state.utterance_q.put_nowait(None)
     except queue.Full:
         pass
     threads[2].join(timeout=SHUTDOWN_TIMEOUT_S)
+    # Clear the HUD partial subtitle on exit (the pipeline's own
+    # notify code will paint the final 'idle' state right after).
+    try:
+        from . import hud as _hud
+        _hud.send("update", icon="🎙", title="Dictando", subtitle="")
+    except Exception:
+        pass
     log("streaming-dictation: loop exit (calling os._exit).")
     # Force-exit: faster-whisper / sounddevice / torch leave non-daemon
     # worker threads alive that otherwise block the interpreter from
@@ -406,7 +462,14 @@ def _capture_loop(state: _StreamState, sd: Any, np: Any) -> None:
             dtype="float32",
             blocksize=VAD_FRAME_SAMPLES,
         ) as stream:
-            log("streaming-dictation: mic open.")
+            try:
+                wid0 = DICTATION_FOCUS_FILE.read_text().strip()
+            except OSError:
+                wid0 = "<missing>"
+            log(
+                f"streaming-dictation: mic open. "
+                f"focus_file_wid={wid0} active={_hypr_activewindow()}"
+            )
             while state.running:
                 data, overflowed = stream.read(VAD_FRAME_SAMPLES)
                 if overflowed:
@@ -431,8 +494,14 @@ def _vad_loop(state: _StreamState, vad: Any, np: Any) -> None:
     when silence is detected. On shutdown, flushes whatever is in
     ``current_utt`` as one final utterance so the last sentence isn't
     lost mid-air.
+
+    Also emits a snapshot of the in-progress utterance to
+    ``partial_q`` roughly every ``_PARTIAL_INTERVAL_S`` while voice
+    is still active, so the partial-transcribe thread can update
+    the HUD with live feedback (Google/VSCode style).
     """
     speaking = False
+    last_partial_t = 0.0
     try:
         while True:
             try:
@@ -448,6 +517,7 @@ def _vad_loop(state: _StreamState, vad: Any, np: Any) -> None:
                 if "start" in event:
                     speaking = True
                     state.current_utt = [frame]
+                    last_partial_t = time.monotonic()
                     continue
                 if "end" in event:
                     state.current_utt.append(frame)
@@ -462,6 +532,24 @@ def _vad_loop(state: _StreamState, vad: Any, np: Any) -> None:
                     continue
             if speaking:
                 state.current_utt.append(frame)
+                # Snapshot every PARTIAL_INTERVAL_S so the HUD shows
+                # live transcription. Drain the queue first so we
+                # never queue more than one stale snapshot — the
+                # partial thread always works on the freshest audio.
+                now = time.monotonic()
+                if now - last_partial_t >= _PARTIAL_INTERVAL_S and state.current_utt:
+                    snapshot = np.concatenate(state.current_utt)
+                    last_partial_t = now
+                    # Drop stale snapshot, push fresh one.
+                    while True:
+                        try:
+                            state.partial_q.get_nowait()
+                        except queue.Empty:
+                            break
+                    try:
+                        state.partial_q.put_nowait(snapshot)
+                    except queue.Full:
+                        pass
         # Drain: flush a half-spoken sentence so the tail isn't lost.
         if state.current_utt:
             utt = np.concatenate(state.current_utt)
@@ -519,14 +607,169 @@ def _transcribe_loop(state: _StreamState, model: Any, np: Any) -> None:
             continue
         out = (" " + text) if state.have_typed else text
         try:
+            _refocus_target()
             _type_text(out)
             state.have_typed = True
+            log(f"streaming-dictation: typed {out!r}.")
             # Keep a short rolling prompt so vocabulary stays consistent
             # across sentences without dragging full history into every
             # decode (which would slow it down and risk drift).
             state.prompt = (state.prompt + " " + text).strip()[-200:]
         except Exception as e:
             log(f"streaming-dictation: type error ({e}); text was {out!r}.")
+
+
+def _partial_loop(state: _StreamState, model: Any, np: Any) -> None:
+    """Transcribe in-progress utterance snapshots and push to HUD.
+
+    Runs in parallel with the final ``_transcribe_loop``. Cheap config:
+    ``beam_size=1`` (greedy) and a tight ``no_speech_threshold`` so
+    half-words at the leading edge don't get printed as hallucinations.
+    Never types anything — only updates the HUD subtitle so the user
+    sees live feedback while speaking. The VAD-confirmed final pass
+    is what actually emits text to ydotool.
+
+    Drops snapshots silently if it can't keep up; we always read the
+    freshest one from the queue.
+    """
+    from . import hud as _hud  # late import: avoid Qt import at module load
+    last_text = ""
+    while True:
+        try:
+            snapshot = state.partial_q.get(timeout=0.2)
+        except queue.Empty:
+            if not state.running:
+                return
+            continue
+        if snapshot is None:  # shutdown sentinel
+            return
+        # If a fresher snapshot is already queued, skip this one.
+        try:
+            while True:
+                snapshot = state.partial_q.get_nowait()
+                if snapshot is None:
+                    return
+        except queue.Empty:
+            pass
+        # Trim to the last _PARTIAL_MAX_S to bound transcribe cost.
+        n_samples = snapshot.shape[0] if hasattr(snapshot, "shape") else len(snapshot)
+        max_samples = int(_PARTIAL_MAX_S * SR)
+        if n_samples > max_samples:
+            snapshot = snapshot[-max_samples:]
+        try:
+            t0 = time.monotonic()
+            segments, _info = model.transcribe(
+                snapshot,
+                language=settings.streaming_dictation_language,
+                beam_size=1,  # fast/greedy — quality not critical for partials
+                initial_prompt=state.prompt or None,
+                condition_on_previous_text=False,
+                vad_filter=False,
+                no_speech_threshold=0.6,
+                log_prob_threshold=-1.0,
+            )
+            text = "".join(s.text for s in segments).strip()
+            dt = time.monotonic() - t0
+        except Exception as e:
+            log(f"streaming-dictation: partial transcribe error ({e}).")
+            continue
+        if not text or text == last_text:
+            continue
+        last_text = text
+        log(f"streaming-dictation: partial {dt:.2f}s → {text!r}")
+        # Elide for HUD: subtitle area is narrow, show the tail.
+        display = text if len(text) <= 80 else "…" + text[-79:]
+        try:
+            _hud.send(
+                "update",
+                icon="🎙",
+                title="Dictando",
+                subtitle=display,
+                timeout=0.05,
+            )
+        except Exception as e:
+            log(f"streaming-dictation: hud send failed ({e}).")
+
+
+def _hypr_activewindow() -> str:
+    """Return a short ``addr|class|title`` describing the focused window.
+
+    Used purely for logging — gives us a snapshot of who hyprland thinks
+    has focus at a given point. Never raises; on any failure returns a
+    descriptive marker so log lines still align.
+    """
+    try:
+        r = subprocess.run(
+            ["hyprctl", "-j", "activewindow"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=0.5,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return f"<hyprctl-error:{e}>"
+    if r.returncode != 0:
+        return f"<hyprctl-rc={r.returncode}>"
+    try:
+        import json
+        d = json.loads(r.stdout or "{}")
+    except Exception as e:
+        return f"<json-error:{e}>"
+    if not d:
+        return "<no-active-window>"
+    return f"{d.get('address', '?')}|{d.get('class', '?')}|{d.get('title', '?')[:40]}"
+
+
+def _refocus_target() -> None:
+    """Re-focus the dictation target window before each keystroke burst.
+
+    The HUD steals focus when it appears, and every Ctrl+F9 release
+    can also bounce focus around. In the batch flow we only injected
+    once, so a single focus restore at start was enough. In streaming
+    we inject per utterance — we must refocus before each one or the
+    second sentence onwards lands in the HUD / tray / nowhere.
+
+    Reads ``DICTATION_FOCUS_FILE`` non-destructively (the pipeline's
+    own cleanup will unlink it at session end). Best-effort: any
+    failure just logs and falls through, matching the batch flow's
+    'inject on whatever has focus' behaviour as the worst case.
+
+    Logs the full picture so we can actually diagnose focus problems
+    instead of guessing: file contents, active window before and after,
+    hyprctl rc/stderr, total time spent.
+    """
+    t0 = time.monotonic()
+    try:
+        wid = DICTATION_FOCUS_FILE.read_text().strip()
+    except (FileNotFoundError, OSError) as e:
+        log(f"streaming-dictation: refocus skipped, focus file unreadable ({e}).")
+        return
+    if not wid:
+        log("streaming-dictation: refocus skipped, focus file empty.")
+        return
+    before = _hypr_activewindow()
+    try:
+        r = subprocess.run(
+            ["hyprctl", "dispatch", "focuswindow", f"address:{wid}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log(f"streaming-dictation: refocus hyprctl failed ({e}).")
+        return
+    # 80ms — enough on Hyprland for the focus change to land
+    # before ydotool fires. Lower than the 150ms used by the batch
+    # flow because we pay this cost per-utterance.
+    time.sleep(0.08)
+    after = _hypr_activewindow()
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    log(
+        f"streaming-dictation: refocus wid={wid} rc={r.returncode} "
+        f"stdout={r.stdout.strip()!r} stderr={r.stderr.strip()!r} "
+        f"before={before} after={after} t={elapsed_ms}ms"
+    )
 
 
 def _type_text(text: str) -> None:
@@ -536,10 +779,58 @@ def _type_text(text: str) -> None:
     ``desktop.type_text`` wrapper) so this module has zero PyQt /
     Qt dependency and the child stays small. Caller-side fallback
     chooses the wrapper if ydotool isn't on PATH.
+
+    Times out after 5 s — a stuck ydotool call must not pin the
+    transcribe loop and block the SIGTERM drain.
+
+    Releases Ctrl + Shift + Alt + Super FIRST. While the user is
+    holding Ctrl+F9 (the streaming dictation key combo), any letter
+    we type becomes a Ctrl+letter shortcut in the target app — the
+    text never appears in the editor and we may even trigger
+    destructive actions (Ctrl+A select-all, Ctrl+S save, ...).
+    Faking key-up events for the modifiers is the only reliable fix
+    that works across X11 and Wayland and any compositor.
+
+    Linux input event codes (see /usr/include/linux/input-event-codes.h):
+      KEY_LEFTCTRL=29, KEY_RIGHTCTRL=97,
+      KEY_LEFTSHIFT=42, KEY_RIGHTSHIFT=54,
+      KEY_LEFTALT=56, KEY_RIGHTALT=100,
+      KEY_LEFTMETA=125, KEY_RIGHTMETA=126.
     """
-    subprocess.run(
-        ["ydotool", "type", "--", text],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    t0 = time.monotonic()
+    try:
+        rmod = subprocess.run(
+            [
+                "ydotool", "key",
+                "29:0", "97:0", "42:0", "54:0",
+                "56:0", "100:0", "125:0", "126:0",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        if rmod.returncode != 0:
+            log(
+                f"streaming-dictation: modifier release rc={rmod.returncode} "
+                f"stderr={rmod.stderr.strip()!r}"
+            )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log(f"streaming-dictation: modifier release failed ({e}).")
+    active_before_type = _hypr_activewindow()
+    try:
+        r = subprocess.run(
+            ["ydotool", "type", "--", text],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        log(
+            f"streaming-dictation: ydotool type len={len(text)} "
+            f"rc={r.returncode} stderr={r.stderr.strip()!r} "
+            f"active={active_before_type} t={elapsed_ms}ms"
+        )
+    except subprocess.TimeoutExpired:
+        log("streaming-dictation: ydotool timeout (5s).")

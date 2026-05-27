@@ -126,3 +126,62 @@ def test_send_client_round_trip(server, qapp):
 def test_send_silent_when_socket_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(hud_mod, "HUD_SOCKET", tmp_path / "nope.sock")
     assert hud_mod.send("show", title="x") is False
+
+
+# ---------------------------------------------------------------------------
+# Focus restore helpers (HUD must not steal focus from the editor)
+# ---------------------------------------------------------------------------
+def test_current_focus_address_returns_none_without_hyprctl(monkeypatch):
+    monkeypatch.setattr(hud_mod.shutil, "which", lambda _: None)
+    assert hud_mod._current_focus_address() is None
+
+
+def test_current_focus_address_skips_self(monkeypatch):
+    monkeypatch.setattr(hud_mod.shutil, "which", lambda _: "/usr/bin/hyprctl")
+
+    class _R:
+        returncode = 0
+        stdout = json.dumps({"address": "0xabc", "title": "voice-opencode-hud"})
+        stderr = ""
+
+    monkeypatch.setattr(hud_mod.subprocess, "run", lambda *a, **kw: _R())
+    # If active window IS the HUD, return None — restoring focus to
+    # ourselves would just bounce.
+    assert hud_mod._current_focus_address() is None
+
+
+def test_current_focus_address_returns_addr(monkeypatch):
+    monkeypatch.setattr(hud_mod.shutil, "which", lambda _: "/usr/bin/hyprctl")
+
+    class _R:
+        returncode = 0
+        stdout = json.dumps({"address": "0xdeadbeef", "title": "kwrite"})
+        stderr = ""
+
+    monkeypatch.setattr(hud_mod.subprocess, "run", lambda *a, **kw: _R())
+    assert hud_mod._current_focus_address() == "0xdeadbeef"
+
+
+def test_focus_window_address_invokes_hyprctl(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **_kw):
+        calls.append(argv)
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(hud_mod.subprocess, "run", fake_run)
+    hud_mod._focus_window_address("0x123")
+    assert calls == [
+        ["hyprctl", "dispatch", "focuswindow", "address:0x123"]
+    ]
+
+
+def test_focus_window_address_silent_on_oserror(monkeypatch):
+    def fake_run(*_a, **_kw):
+        raise OSError("hyprctl missing")
+    monkeypatch.setattr(hud_mod.subprocess, "run", fake_run)
+    # Must not raise.
+    hud_mod._focus_window_address("0x456")

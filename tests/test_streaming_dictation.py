@@ -393,4 +393,11 @@ def test_type_text_invokes_ydotool_with_double_dash(monkeypatch):
 
     monkeypatch.setattr(streaming_dictation.subprocess, "run", fake_run)
     streaming_dictation._type_text("hola --raro")
-    assert runs == [["ydotool", "type", "--", "hola --raro"]]
+    # We release modifier keys first (otherwise a held Ctrl turns
+    # our 'hola' into Ctrl+h Ctrl+o ...), query hyprctl for logging,
+    # then type the text.
+    ydotool_calls = [r for r in runs if r and r[0] == "ydotool"]
+    assert len(ydotool_calls) == 2
+    assert ydotool_calls[0][:2] == ["ydotool", "key"]
+    assert "29:0" in ydotool_calls[0] and "97:0" in ydotool_calls[0]  # Ctrl L+R release
+    assert ydotool_calls[1] == ["ydotool", "type", "--", "hola --raro"]

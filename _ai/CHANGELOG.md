@@ -3,6 +3,85 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-28 — Streaming dictation focus + observability fixes
+
+Iterated on the streaming-dictation flow shipped 2026-05-27. The
+user reported "el texto aparece en el HUD, no en kwrite" and "no
+se ve nada del partial mientras hablo". Both turned out to be
+focus / observability bugs, not transcription bugs. Fixes:
+
+1. **HUD no longer steals focus from the dictation target.** Qt's
+   `WindowDoesNotAcceptFocus` is advisory — Hyprland focuses Tool
+   / utility windows on map anyway. `TurnHUD.show_msg()` now
+   captures `hyprctl activewindow` before calling `self.show()` and,
+   160 ms after mapping (i.e. after `_apply_hyprland_rules`
+   pinned/floated the widget), dispatches `focuswindow address:<prev>`
+   to restore it. New helpers `_current_focus_address()` and
+   `_focus_window_address()` (5 tests in `tests/test_hud.py`). If
+   the active window IS the HUD, skip — prevents a focus loop when
+   the HUD shows twice in quick succession.
+
+2. **`DICTATION_FOCUS_FILE` survives streaming sessions.** The
+   pipeline's `_restore_dictation_focus()` used to `unlink()` the
+   file in its `finally:` block — fine for batch (single inject)
+   but fatal for streaming, where the child needs to re-focus the
+   target window before every keystroke burst. Added a `keep_file`
+   kwarg; the streaming branch passes `keep_file=True` and
+   `stop_dictation_and_inject` cleans it up once the child has
+   drained (the line was already there from the original commit).
+
+3. **Per-call observability in the streaming child.** Without these
+   logs we couldn't diagnose anything — every "it doesn't work"
+   forced re-running the whole flow blind. Now:
+   - Timestamps include milliseconds (`logging.py`).
+   - New `_hypr_activewindow()` returns `addr|class|title` for use
+     in log lines.
+   - `_refocus_target` logs the focus file contents, before/after
+     active window, `hyprctl` rc/stderr, and elapsed ms.
+   - `_type_text` logs `len`, `rc`, `stderr`, active window at
+     dispatch time, and elapsed ms.
+   - The SIGTERM handler logs active window + focus file wid so we
+     can see what state the compositor was in when the user
+     released Ctrl+F9.
+   - `mic open` logs focus file wid + active window.
+
+4. **Reverted broken Hyprland windowrule additions.** Hyprland 0.55+
+   requires every `windowrule` to have an explicit value; the
+   boolean-flag rules I added (`noinitialfocus, class:...`,
+   `nofocus, ...`, `noblur, ...`) emitted "Config error: missing a
+   value" notifications on every reload. The HUD already signals
+   "don't focus me" via Qt's window flags — the right fix is the
+   Qt-side focus restore above, not compositor rules. `voice.conf`
+   now contains only the Ctrl+F9 binds plus a comment explaining
+   why there are no focus rules.
+
+Tests: 618 passing (was 613, +5 for the new HUD focus helpers).
+Ruff + mypy clean.
+
+What's NOT done yet (carried over for next session):
+
+- **Partial-transcription cadence.** The 2026-05-27 commit added a
+  `_partial_loop` thread that re-transcribes the in-flight
+  utterance every ~1 s for live HUD feedback. The log shows it
+  only fires after the user stops speaking (the VAD only enqueues
+  snapshots while `speaking == True`, and on CPU the transcribe
+  takes longer than the interval anyway: RTF ≈ 1.25 with `small`
+  int8). Architecturally the davabase/whisper_real_time approach
+  (re-transcribe the whole rolling buffer every 1 s) doesn't scale
+  on CPU. Two viable paths: (a) load `tiny` for partials and
+  `small` for finals — same model directory, double the warmup
+  cost; (b) keep VAD segmentation and accept that "partials" really
+  mean "previous sentence is being typed while you start the
+  next one". Option (b) is what the commit currently ships and
+  is what the log demonstrates works. Decide before tweaking.
+
+- **"Wrong-window" guard.** Right now if the user pulses Ctrl+F9
+  while focused on Ghostty (not kwrite) the dictation lands in
+  Ghostty — correct behaviour according to the captured wid, but
+  surprising. Optional: compare `_hypr_activewindow()` to
+  `DICTATION_FOCUS_FILE` contents immediately before `_type_text`
+  and skip + log loud if they diverge.
+
 ## 2026-05-27 — Streaming dictation (Ctrl+F9, VAD + faster-whisper)
 
 Replaces the per-utterance batch flow (record → STT → inject) for
