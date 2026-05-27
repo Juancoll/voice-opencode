@@ -31,11 +31,27 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 DEV_MODE=0
+DOCTOR_ONLY=0
+RESTART_TRAY=0
 for arg in "$@"; do
     case "$arg" in
         --dev) DEV_MODE=1 ;;
+        --doctor)
+            # Run only the post-install verification section.
+            DOCTOR_ONLY=1 ;;
+        --restart-tray)
+            # Kill any running tray and re-spawn it; useful after a
+            # code update so the user gets the new behaviour without
+            # logging out.
+            RESTART_TRAY=1 ;;
         -h|--help)
-            sed -n '2,28p' "$0"; exit 0 ;;
+            sed -n '2,28p' "$0"
+            echo
+            echo "Flags:"
+            echo "  --dev           also install ruff/mypy/pytest"
+            echo "  --doctor        skip install, run verification only"
+            echo "  --restart-tray  kill running tray and respawn it"
+            exit 0 ;;
     esac
 done
 
@@ -62,6 +78,261 @@ ensure_line() {
     touch "$file"
     grep -qxF "$line" "$file" || printf '%s\n' "$line" >> "$file"
 }
+
+# ---------- shared doctor helpers (used by main run + --doctor) -------------
+# These run at the end of a normal install and standalone via --doctor.
+# Each check echoes ok/warn/err and increments a counter so the final
+# summary tells the user whether to act.
+DOCTOR_FAIL=0
+DOCTOR_WARN=0
+
+_d_ok()   { ok   "$@"; }
+_d_warn() { warn "$@"; DOCTOR_WARN=$((DOCTOR_WARN + 1)); }
+_d_err()  { err  "$@"; DOCTOR_FAIL=$((DOCTOR_FAIL + 1)); }
+
+check_command() {
+    # check_command <binary> [hint]
+    local bin="$1" hint="${2:-}"
+    if command -v "$bin" >/dev/null 2>&1; then
+        _d_ok "$bin found ($(command -v "$bin"))"
+    else
+        _d_err "$bin missing. $hint"
+    fi
+}
+
+check_file() {
+    # check_file <path> <description>
+    local path="$1" desc="$2"
+    if [[ -s "$path" ]]; then
+        _d_ok "$desc present ($path)"
+    else
+        _d_err "$desc missing: $path"
+    fi
+}
+
+check_tray_running() {
+    if pgrep -af "voice_opencode\.tray" >/dev/null 2>&1; then
+        local pid
+        pid=$(pgrep -af "voice_opencode\.tray" | awk 'NR==1{print $1}')
+        _d_ok "tray running (pid=$pid)"
+        return 0
+    else
+        _d_err "tray NOT running. Start it with: $ROOT/voice tray &"
+        return 1
+    fi
+}
+
+check_hud_socket() {
+    local sock="/run/user/$(id -u)/voice-opencode/hud.sock"
+    if [[ -S "$sock" ]]; then
+        _d_ok "HUD socket present ($sock)"
+    else
+        _d_warn "HUD socket missing ($sock) — tray may not have finished booting."
+    fi
+}
+
+check_hypr_binds() {
+    (( IS_HYPRLAND )) || return 0
+    if ! command -v hyprctl >/dev/null 2>&1; then
+        _d_warn "hyprctl not on PATH; cannot verify binds."
+        return 0
+    fi
+    local f9_count
+    f9_count=$(hyprctl binds 2>/dev/null | grep -c "key: F9" || true)
+    if (( f9_count >= 5 )); then
+        _d_ok "Hyprland F9 binds loaded ($f9_count entries — expect 5: start/stop/reset/dictate-start/dictate-stop)"
+    elif (( f9_count > 0 )); then
+        _d_warn "Hyprland has only $f9_count F9 bind(s); expected 5. Run: hyprctl reload"
+    else
+        _d_err "Hyprland has NO F9 binds. Check $HOME/.config/hypr/conf.d/voice.conf is sourced; then: hyprctl reload"
+    fi
+}
+
+check_state_endpoint() {
+    if ! out=$("$ROOT/voice" state 2>&1); then
+        _d_err "'voice state' failed: $out"
+        return 1
+    fi
+    if echo "$out" | grep -q '"state"'; then
+        _d_ok "'voice state' responds ($(echo "$out" | head -c 80)…)"
+    else
+        _d_err "'voice state' returned unexpected output: $out"
+    fi
+}
+
+check_mcp_config() {
+    local cfg="$HOME/.config/opencode/opencode.json"
+    if [[ ! -f "$cfg" ]]; then
+        _d_warn "opencode.json missing ($cfg) — voice_desktop MCP will not load."
+        return 0
+    fi
+    if grep -q '"voice_desktop"' "$cfg"; then
+        _d_ok "voice_desktop MCP entry in $cfg"
+    else
+        _d_warn "$cfg has no voice_desktop entry."
+    fi
+    if grep -q '"external_directory"' "$cfg"; then
+        _d_ok "opencode permission allow-list present"
+    else
+        _d_warn "opencode.json missing permission.external_directory — headless turns will hang."
+    fi
+}
+
+check_ydotool_socket() {
+    local sock="/run/user/$(id -u)/.ydotool_socket"
+    if [[ -S "$sock" ]]; then
+        _d_ok "ydotool socket present ($sock)"
+    else
+        _d_warn "ydotool socket missing ($sock). Start with: systemctl --user start ydotool"
+    fi
+}
+
+check_uinput_access() {
+    if [[ -w /dev/uinput ]]; then
+        _d_ok "/dev/uinput writable"
+    else
+        _d_warn "/dev/uinput not writable. You may need: sudo usermod -aG input $USER && reboot"
+    fi
+}
+
+check_python_deps() {
+    if [[ ! -x "$ROOT/venv/bin/python" ]]; then
+        _d_err "venv missing. Run ./install.sh (without --doctor)."
+        return 1
+    fi
+    local missing=()
+    for mod in PyQt6 requests mcp; do
+        "$ROOT/venv/bin/python" -c "import $mod" 2>/dev/null || missing+=("$mod")
+    done
+    if (( ${#missing[@]} == 0 )); then
+        _d_ok "Python deps importable (PyQt6, requests, mcp)"
+    else
+        _d_err "Python deps missing: ${missing[*]}. Re-run ./install.sh"
+    fi
+}
+
+check_whisper_model() {
+    check_file "$ROOT/models/${WHISPER_MODEL:-ggml-small.bin}" "whisper model"
+}
+
+check_voices() {
+    if compgen -G "$ROOT/voices/*.onnx" > /dev/null; then
+        local n
+        n=$(ls "$ROOT"/voices/*.onnx | wc -l)
+        _d_ok "Piper voices present ($n)"
+    else
+        _d_err "No Piper voices in $ROOT/voices/. Run: ./download-voice.sh es/es_AR/daniela/high"
+    fi
+}
+
+check_opencode_serve() {
+    if systemctl --user is-active --quiet opencode-serve.service 2>/dev/null; then
+        _d_ok "opencode-serve.service active"
+    else
+        _d_warn "opencode-serve.service not active. Start with: systemctl --user start opencode-serve"
+    fi
+}
+
+restart_tray_if_running() {
+    local pids
+    pids=$(pgrep -af "voice_opencode\.tray" | awk '{print $1}' || true)
+    if [[ -n "$pids" ]]; then
+        log "Stopping existing tray (pid=$pids)…"
+        # shellcheck disable=SC2086
+        kill $pids 2>/dev/null || true
+        sleep 1
+    fi
+    log "Starting tray…"
+    nohup "$ROOT/voice" tray >/dev/null 2>&1 &
+    disown || true
+    sleep 2
+    if pgrep -af "voice_opencode\.tray" >/dev/null 2>&1; then
+        _d_ok "tray respawned ($(pgrep -af voice_opencode.tray | head -1))"
+    else
+        _d_err "tray failed to start. Run manually: $ROOT/voice tray  (and read stderr)"
+    fi
+}
+
+run_doctor() {
+    log "Running verification (doctor)…"
+    echo
+    log "1. Binaries on PATH"
+    check_command python3 "install python"
+    check_command ydotool "install via your package manager"
+    check_command whisper-cli "install whisper.cpp or run install.sh (vendored on apt/dnf)"
+    # piper may be 'piper', 'piper-tts', or vendored under $ROOT/vendor/piper/
+    if command -v piper >/dev/null 2>&1 \
+       || command -v piper-tts >/dev/null 2>&1 \
+       || [[ -x "$ROOT/vendor/piper/piper" ]]; then
+        _d_ok "piper found (binary, piper-tts, or vendored)"
+    else
+        _d_err "piper missing. Install piper-tts(-bin) or run install.sh"
+    fi
+    if [[ "$DISPLAY_KIND" == "wayland" ]]; then
+        check_command wl-copy "install wl-clipboard"
+        check_command grim    "install grim"
+        check_command wtype   "install wtype"
+    else
+        check_command xclip   "install xclip"
+        check_command scrot   "install scrot"
+        check_command xdotool "install xdotool"
+    fi
+    (( IS_HYPRLAND )) && check_command hyprctl "you said you're on Hyprland but hyprctl is missing?"
+
+    echo
+    log "2. Project files"
+    check_python_deps
+    check_whisper_model
+    check_voices
+
+    echo
+    log "3. Services & sockets"
+    check_opencode_serve
+    check_ydotool_socket
+    check_uinput_access
+
+    echo
+    log "4. Tray (HUD + system tray icon)"
+    if check_tray_running; then
+        check_hud_socket
+    elif (( RESTART_TRAY == 0 )); then
+        _d_warn "Re-run with --restart-tray to auto-spawn it."
+    fi
+
+    echo
+    log "5. Compositor binds"
+    check_hypr_binds
+
+    echo
+    log "6. opencode integration"
+    check_state_endpoint
+    check_mcp_config
+
+    echo
+    if (( DOCTOR_FAIL == 0 && DOCTOR_WARN == 0 )); then
+        ok "All checks passed. F9 should work."
+    elif (( DOCTOR_FAIL == 0 )); then
+        warn "$DOCTOR_WARN warning(s). System probably works; review above."
+    else
+        err  "$DOCTOR_FAIL error(s), $DOCTOR_WARN warning(s). Fix errors before using F9."
+        return 1
+    fi
+}
+
+# Short-circuit: --doctor skips install steps entirely.
+if (( DOCTOR_ONLY )); then
+    # Need the env detection block to run first; do a minimal version
+    # so the doctor knows which packages/binaries to expect.
+    case "$(uname -s)" in Linux) OS_KIND=linux ;; *) err "Linux only"; exit 1 ;; esac
+    DISPLAY_KIND="${XDG_SESSION_TYPE:-${WAYLAND_DISPLAY:+wayland}}"
+    DISPLAY_KIND="${DISPLAY_KIND:-${DISPLAY:+x11}}"
+    DISPLAY_KIND="${DISPLAY_KIND:-unknown}"
+    IS_HYPRLAND=0
+    [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && IS_HYPRLAND=1
+    (( RESTART_TRAY )) && restart_tray_if_running
+    run_doctor
+    exit $?
+fi
 
 # ---------- 1. environment detection ----------------------------------------
 log "Detecting environment…"
@@ -588,15 +859,24 @@ if [[ "$OC_CFG_MTIME_AFTER" -gt "$OC_CFG_MTIME_BEFORE" ]]; then
     fi
 fi
 
+# ---------- 10. tray restart (so code updates take effect) ------------------
+# A common foot-gun: user runs `git pull && ./install.sh`, expects the
+# new behaviour, but the tray is still the old PID importing old code.
+# Detect a stale tray and replace it.
+log "Ensuring tray is running (and using the latest code)…"
+restart_tray_if_running
+
+# ---------- 11. verification (doctor) ---------------------------------------
+echo
+run_doctor || warn "Doctor reported errors — read above and fix before using F9."
+
 # ---------- done -------------------------------------------------------------
 echo
-log "Done. Quick check:"
-./voice state || warn "Server may need a moment to boot. Try: systemctl --user status opencode-serve"
-echo
+log "Done."
 if (( IS_HYPRLAND )); then
-    ok "Reload Hyprland (super+shift+r or 'hyprctl reload') to pick up new binds."
+    ok "If F9 binds are not detected above, run: hyprctl reload"
 elif (( IS_XFCE )); then
     ok "XFCE keybinds applied. Log out and back in if F9 doesn't fire immediately."
 fi
-ok "Launch the tray now with:  ./voice tray  &"
-(( IS_HYPRLAND || IS_XFCE )) || ok "(Bind F9 manually in your DE — see warnings above.)"
+ok "Re-run anytime with:  ./install.sh --doctor   (verification only)"
+ok "Force tray restart:   ./install.sh --doctor --restart-tray"

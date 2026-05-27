@@ -3,6 +3,38 @@
 What I (the assistant) actually did, when, and why. Newest first.
 This is intentionally more granular than `_ai/DECISIONS.md`.
 
+## 2026-05-24 — Installer doctor + auto-restart tray on update
+
+User hit the classic foot-gun: tray crashed silently, F9 was bound
+but `voice start/stop` had no HUD to talk to, system was "installed"
+but unusable. Worse: `git pull && ./install.sh` would not have
+fixed it because nothing in install.sh checked for a running tray
+or restarted it.
+
+Added to `install.sh`:
+
+- `--doctor` flag: standalone verification. Checks 6 categories
+  (binaries on PATH, project files, services & sockets, tray + HUD
+  socket, compositor binds, opencode integration). Each check is
+  ok/warn/err with a counter; exits non-zero on errors.
+- `--restart-tray` flag: kill any running `voice_opencode.tray`
+  process and respawn it. Combines with `--doctor` for a quick
+  "post-update reset" command.
+- Step 10 in normal install: always `restart_tray_if_running` so
+  the user automatically gets the new code without logging out.
+- Step 11 in normal install: always run the doctor at the end so
+  the success line is evidence-based, not aspirational.
+
+Checks include: hyprctl `binds` grep for `key: F9` (expects 5 — the
+five `bind/bindr` entries), `voice state` HTTP round-trip, HUD
+socket existence, opencode permission allow-list presence, ydotool
+socket, /dev/uinput writability, vendored piper alternative paths.
+
+This replaces the previous final block that just called
+`./voice state` and printed "launch the tray now with: …" — which
+left the user to figure out for themselves whether anything was
+actually working.
+
 ## 2026-05-24 — Auto-fallback to type_text for Electron/Firefox targets
 
 Documenting the limitation wasn't enough — user still hit it in
